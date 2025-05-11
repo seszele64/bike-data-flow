@@ -7,8 +7,8 @@ from minio.error import S3Error
 from io import BytesIO
 
 # Import configuration
-from . import config
-from ..create_client import get_minio_client
+from .. import config
+from ...create_client import get_minio_client
 
 def main():
     # Generate filename with current date
