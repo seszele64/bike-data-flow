@@ -9,9 +9,9 @@ import dotenv
 
 # Import the get_minio_client function from create_client.py
 from pathlib import Path
-from ..create_client import get_minio_client
+from ...create_client import get_minio_client
 # Import configuration
-from .config import (
+from ..config import (
     WRM_STATIONS_DATA_URL,
     WRM_STATIONS_S3_PREFIX,
     WRM_STATION_BASE_FILENAME,
