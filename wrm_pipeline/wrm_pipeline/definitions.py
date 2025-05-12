@@ -4,7 +4,8 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-import wrm_pipeline.assets as assets
+# import wrm_pipeline.assets as assets
+from .assets import assets
 
 # Attempt to import S3/MinIO configuration from your storage config
 # Ensure these variables are defined in storage/wrm_data/config.py
