@@ -11,18 +11,13 @@ from .assets import assets
 # Ensure these variables are defined in storage/wrm_data/config.py
 # (which likely loads them from your .env file)
 # Load environment variables from .env file in parent directory
-dotenv_path = Path(__file__).parents[2] / '.env'
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
 load_dotenv(dotenv_path)
 
 # Get S3/MinIO configuration from environment variables
 HETZNER_ENDPOINT_URL = os.environ.get('HETZNER_ENDPOINT_URL')
 HETZNER_ACCESS_KEY_ID = os.environ.get('HETZNER_ACCESS_KEY_ID')
 HETZNER_SECRET_ACCESS_KEY = os.environ.get('HETZNER_SECRET_ACCESS_KEY')
-
-# add https:// to the endpoint URL if not present
-if HETZNER_ENDPOINT_URL and not HETZNER_ENDPOINT_URL.startswith("https://"):
-    HETZNER_ENDPOINT_URL = "https://" + HETZNER_ENDPOINT_URL
-
 
 all_assets = load_assets_from_modules([assets])
 
