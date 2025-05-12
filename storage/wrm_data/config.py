@@ -7,6 +7,7 @@ dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 load_dotenv(dotenv_path=dotenv_path, override=True)  # .env is in root directory
 
 # s3
+HETZNER_ENDPOINT = os.environ.get('HETZNER_ENDPOINT')
 HETZNER_ENDPOINT_URL = os.environ.get('HETZNER_ENDPOINT_URL')
 HETZNER_ACCESS_KEY_ID = os.environ.get('HETZNER_ACCESS_KEY_ID')
 HETZNER_SECRET_ACCESS_KEY = os.environ.get('HETZNER_SECRET_ACCESS_KEY')
