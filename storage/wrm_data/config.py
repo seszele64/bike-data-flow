@@ -6,6 +6,11 @@ import os.path
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 load_dotenv(dotenv_path=dotenv_path)  # .env is in root directory
 
+# s3
+HETZNER_ENDPOINT_URL = os.environ.get('HETZNER_ENDPOINT_URL')
+HETZNER_ACCESS_KEY_ID = os.environ.get('HETZNER_ACCESS_KEY_ID')
+HETZNER_SECRET_ACCESS_KEY = os.environ.get('HETZNER_SECRET_ACCESS_KEY')
+
 # --- URLs for data sources ---
 WRM_FAILURES_DATA_URL = "https://www.wroclaw.pl/open-data/39605eb0-8055-4733-bb02-04b96791d36a/WRM_usterki.csv"
 WRM_STATIONS_DATA_URL = "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw"
