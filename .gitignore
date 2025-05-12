@@ -5,3 +5,6 @@ __pycache__/
 
 # ignore folders that begin with a dot
 .*
+
+# dagster home
+dagster_home
