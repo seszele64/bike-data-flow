@@ -4,7 +4,7 @@ import os.path
 
 # Load environment variables from .env file
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
-load_dotenv(dotenv_path=dotenv_path)  # .env is in root directory
+load_dotenv(dotenv_path=dotenv_path, override=True)  # .env is in root directory
 
 # s3
 HETZNER_ENDPOINT_URL = os.environ.get('HETZNER_ENDPOINT_URL')
