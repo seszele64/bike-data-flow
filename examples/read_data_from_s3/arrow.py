@@ -20,7 +20,7 @@ s3_fs = fs.S3FileSystem(
 
 # Example: Read data from your S3 bucket
 bucket_name = BUCKET_NAME
-path = 'bike-data/gen_info/processed/2025/05/12/'
+path = 'bike-data/gen_info/processed/'
 
 # Read as a dataset (for multiple files or partitioned data)
 dataset = ds.dataset(
