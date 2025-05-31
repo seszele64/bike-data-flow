@@ -175,8 +175,8 @@ def wrm_stations_processed_asset(context: AssetExecutionContext, s3_resource: S3
     # Create processed data filename and S3 key
     current_time = datetime.utcnow() + timedelta(hours=1)
     base_filename = s3_key.split('/')[-1].replace('.txt', '')
-    processed_filename = f"{base_filename}_processed.parquet"
-    date_path = current_time.strftime('%Y/%m/%d')
+    processed_filename = f"{base_filename}.parquet"
+    date_path = current_time.strftime('dt=%Y-%m-%d')
     processed_s3_key = f"{WRM_STATIONS_S3_PREFIX}processed/{date_path}/{processed_filename}"
     
     # Save to S3
