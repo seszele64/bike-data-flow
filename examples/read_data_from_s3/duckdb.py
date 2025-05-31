@@ -31,9 +31,48 @@ CREATE OR REPLACE SECRET hetzner_secret (
 
 # Now you can query directly from S3 with the updated path
 # For example, if you have Parquet files:
-query_result = con.execute("""
-SELECT * FROM read_parquet('s3://disband-yodel-botanical/bike-data/gen_info/processed/2025/05/12/*.parquet')
+# query_result = con.execute("""
+# SELECT * FROM read_parquet('s3://disband-yodel-botanical/bike-data/gen_info/processed/2025/05/12/*.parquet')
+# """).fetchdf()
+
+# # Print the result
+# print(query_result)
+
+print("\n=== Creating readable views ===")
+
+# Create view for processed data (parquet files)
+con.execute("""
+CREATE OR REPLACE VIEW bike_data_processed AS
+SELECT * FROM read_parquet('s3://disband-yodel-botanical/bike-data/gen_info/processed/**/*.parquet')
+""")
+
+# Get basic info about the dataset
+result = con.execute("""
+SELECT 
+    COUNT(*) as total_records,
+    COUNT(DISTINCT dt) as unique_dates,
+    MIN(dt) as earliest_date,
+    MAX(dt) as latest_date
+FROM bike_data_processed
 """).fetchdf()
 
-# Print the result
-print(query_result)
+print("Dataset overview:")
+print(result)
+
+# Show sample data
+print("\n=== Sample data (first 10 rows) ===")
+sample_data = con.execute("""
+SELECT * 
+FROM bike_data_processed 
+LIMIT 100
+""").fetchdf()
+
+print(sample_data)
+
+# Show column info
+print("\n=== Column information ===")
+columns_info = con.execute("""
+DESCRIBE bike_data_processed
+""").fetchdf()
+
+print(columns_info)
