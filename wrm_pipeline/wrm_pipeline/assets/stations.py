@@ -62,8 +62,8 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext, s3_resource: S3R
     # s3_resource.ensure_bucket_exists(bucket_name, logger) # S3Resource does not have this method directly. Use s3_client.head_bucket or similar if needed.
 
     # Create date path for S3 object name
-    date_path = current_time.strftime('%Y/%m/%d')
-    s3_object_name = f"{WRM_STATIONS_S3_PREFIX}{date_path}/{filename}"
+    date_str = current_time.strftime('%Y-%m-%d')
+    s3_object_name = f"{WRM_STATIONS_S3_PREFIX}dt={date_str}/{filename}"
     
     # Upload to S3
     logger.info(f"Uploading '{filename}' to S3 bucket '{bucket_name}' as '{s3_object_name}'...")
