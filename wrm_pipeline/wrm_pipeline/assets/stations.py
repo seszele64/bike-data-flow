@@ -63,7 +63,7 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext, s3_resource: S3R
 
     # Create date path for S3 object name
     date_str = current_time.strftime('%Y-%m-%d')
-    s3_object_name = f"{WRM_STATIONS_S3_PREFIX}dt={date_str}/{filename}"
+    s3_object_name = f"{WRM_STATIONS_S3_PREFIX}raw/dt={date_str}/{filename}"
     
     # Upload to S3
     logger.info(f"Uploading '{filename}' to S3 bucket '{bucket_name}' as '{s3_object_name}'...")
