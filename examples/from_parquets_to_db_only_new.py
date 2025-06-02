@@ -15,8 +15,6 @@ conn.execute(f"SET s3_secret_access_key='{os.getenv('HETZNER_SECRET_ACCESS_KEY')
 conn.execute("SET s3_use_ssl=true")
 conn.execute("SET s3_url_style='path'")
 
-conn.execute("ATTACH 'host=localhost port=5432 dbname=bike_db user=postgres' AS bike_db (TYPE postgres)")
-
 # Get bucket and folder from environment
 bucket_name = os.getenv('BUCKET_NAME')
 target_folder = os.getenv('TARGET_S3_FOLDER')
