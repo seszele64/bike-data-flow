@@ -6,10 +6,8 @@ from pathlib import Path
 
 # import wrm_pipeline.assets as assets
 from .assets import assets
+from .sensors.stations_sensor import s3_raw_stations_sensor
 
-# Attempt to import S3/MinIO configuration from your storage config
-# Ensure these variables are defined in storage/wrm_data/config.py
-# (which likely loads them from your .env file)
 # Load environment variables from .env file in parent directory
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
 load_dotenv(dotenv_path)
@@ -27,11 +25,10 @@ s3_resource_config = {
     "aws_access_key_id": HETZNER_ACCESS_KEY_ID,
     "aws_secret_access_key": HETZNER_SECRET_ACCESS_KEY
 }
-# if S3_REGION_NAME: # Uncomment if you add S3_REGION_NAME to your config
-# s3_resource_config["region_name"] = S3_REGION_NAME
 
 defs = Definitions(
     assets=all_assets,
+    sensors=[s3_raw_stations_sensor],  # Add your sensor here
     resources={
         "s3_resource": S3Resource(**s3_resource_config),
     }
