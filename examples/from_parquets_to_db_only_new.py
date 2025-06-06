@@ -103,4 +103,13 @@ columns_info = conn.execute("PRAGMA table_info(processed_bike_stations)").df()
 print("\nColumns in processed_bike_stations table:")
 print(columns_info)
 
+# Export the table to S3 as Parquet
+conn.execute(f"""
+    COPY processed_bike_stations 
+    TO 's3://{bucket_name}/{target_folder}gen_info/deduplicated/deduplicated_bike_stations.parquet'
+    (FORMAT PARQUET)
+""")
+
+print(f"Table exported to s3://{bucket_name}/{target_folder}gen_info/deduplicated/deduplicated_bike_stations.parquet")
+
 conn.close()
