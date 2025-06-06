@@ -1,8 +1,10 @@
 import os
 from dagster import ConfigurableResource, EnvVar
+from dagster_aws.s3.resources import S3Resource
 from pydantic import Field
 from minio import Minio
 from minio.error import S3Error
+import boto3
 
 class MinIOResource(ConfigurableResource):
     endpoint_url: str = Field(
@@ -45,3 +47,30 @@ class MinIOResource(ConfigurableResource):
         except S3Error as e:
             logger.error(f"Error checking or creating bucket '{bucket_name}': {e}")
             raise
+
+class HetznerS3Resource(ConfigurableResource):
+    """S3Resource for Hetzner Object Storage"""
+    endpoint_url: str = Field(
+        default=EnvVar("HETZNER_ENDPOINT_URL"),
+        description="Hetzner S3 endpoint URL"
+    )
+    access_key: str = Field(
+        default=EnvVar("HETZNER_ACCESS_KEY_ID"),
+        description="Hetzner access key"
+    )
+    secret_key: str = Field(
+        default=EnvVar("HETZNER_SECRET_ACCESS_KEY"),
+        description="Hetzner secret key"
+    )
+    
+    def get_client(self):
+        """Return boto3 S3 client configured for Hetzner"""
+        return boto3.client(
+            's3',
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key
+        )
+
+# Create the s3_resource instance
+s3_resource = HetznerS3Resource()
