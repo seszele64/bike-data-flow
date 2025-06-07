@@ -71,7 +71,18 @@ def wrm_stations_processed_asset(context: AssetExecutionContext, wrm_stations_ra
         # Parse CSV data
         df = pd.read_csv(StringIO(fixed_data))
         
-        # Add processing timestamp
+        # Extract date from the S3 key (from the partition path)
+        # Format: gen_info/raw/dt=2025-06-07/station_data_20250607_123456.txt
+        import re
+        date_match = re.search(r'dt=(\d{4}-\d{2}-\d{2})', wrm_stations_raw_data)
+        if date_match:
+            data_date = date_match.group(1)
+        else:
+            # Fallback to current date if pattern not found
+            data_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Add date and processing timestamp
+        df['date'] = data_date
         df['processed_at'] = datetime.now()
         
         # Generate S3 key for processed data
