@@ -13,17 +13,19 @@ dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__fil
 load_dotenv(dotenv_path)
 
 # Get S3/MinIO configuration from environment variables
-HETZNER_ENDPOINT_URL = os.environ.get('HETZNER_ENDPOINT_URL')
-HETZNER_ACCESS_KEY_ID = os.environ.get('HETZNER_ACCESS_KEY_ID')
-HETZNER_SECRET_ACCESS_KEY = os.environ.get('HETZNER_SECRET_ACCESS_KEY')
+S3_ENDPOINT_URL = os.environ.get('S3_ENDPOINT_URL')
+S3_ACCESS_KEY_ID = os.environ.get('S3_ACCESS_KEY_ID')
+S3_SECRET_ACCESS_KEY = os.environ.get('S3_SECRET_ACCESS_KEY')
+S3_REGION_NAME = os.environ.get('S3_REGION_NAME', None)  # Optional, can be None
 
 all_assets = load_assets_from_modules([assets])
 
 # Determine if a region name is configured and should be passed
 s3_resource_config = {
-    "endpoint_url": HETZNER_ENDPOINT_URL,
-    "aws_access_key_id": HETZNER_ACCESS_KEY_ID,
-    "aws_secret_access_key": HETZNER_SECRET_ACCESS_KEY
+    "endpoint_url": S3_ENDPOINT_URL,
+    "aws_access_key_id": S3_ACCESS_KEY_ID,
+    "aws_secret_access_key": S3_SECRET_ACCESS_KEY,
+    "region_name": S3_REGION_NAME
 }
 
 defs = Definitions(
