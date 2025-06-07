@@ -27,9 +27,10 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
         response = requests.get(api_url, timeout=30)
         response.raise_for_status()
         
-        # Generate timestamp for file naming
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        date_partition = datetime.now().strftime("%Y-%m-%d")
+        # Capture current time for consistency
+        current_time = datetime.now()
+        timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+        date_partition = current_time.strftime("%Y-%m-%d")
         
         # Define S3 key for raw data
         s3_key = f"{WRM_STATIONS_S3_PREFIX}raw/dt={date_partition}/station_data_{timestamp}.txt"
