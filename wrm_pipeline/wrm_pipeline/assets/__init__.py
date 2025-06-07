@@ -1,0 +1,1 @@
+from .assets import *  # This will import everything exported by assets.py
