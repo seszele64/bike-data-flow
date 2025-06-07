@@ -1,16 +1,20 @@
 from dagster import sensor, RunRequest, SkipReason, SensorEvaluationContext
+from dagster_aws.s3.resources import S3Resource
 from ..config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
-from ..resources import HetznerS3Resource
 
 @sensor(
     asset_selection=["wrm_stations_processed"],
     minimum_interval_seconds=60,  # Check every minute
-    name="s3_raw_stations_sensor"
+    name="s3_raw_stations_sensor",
+    required_resource_keys={"s3_resource"}  # Declare the required resource
 )
-def s3_raw_stations_sensor(context: SensorEvaluationContext, s3_resource: HetznerS3Resource):
+def s3_raw_stations_sensor(context: SensorEvaluationContext):
     """
     Sensor that monitors S3 for new raw station files and triggers processing.
     """
+    
+    # Get S3 client directly from the resource
+    s3_client = context.resources.s3_resource
     
     # Define the S3 path to monitor (raw files)
     s3_prefix = f"{WRM_STATIONS_S3_PREFIX}raw/"
@@ -19,9 +23,6 @@ def s3_raw_stations_sensor(context: SensorEvaluationContext, s3_resource: Hetzne
     last_processed_key = context.cursor or None
     
     try:
-        # Get S3 client
-        s3_client = s3_resource.get_client()
-        
         # List objects in the S3 bucket with the specified prefix
         response = s3_client.list_objects_v2(
             Bucket=BUCKET_NAME,
