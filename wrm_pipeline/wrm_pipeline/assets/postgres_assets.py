@@ -190,110 +190,49 @@ def bike_failures_table(context: AssetExecutionContext):
 def load_stations_to_postgres(context: AssetExecutionContext, wrm_stations_data: pd.DataFrame):
     """
     Loads new station data from deduplicated DataFrame to PostgreSQL.
-    Uses pandas operations to efficiently identify and insert only new records.
+    Uses optimized staging table approach for efficient bulk insertion.
     """
     if wrm_stations_data.empty:
         context.log.info("No station data to load")
         return {"rows_inserted": 0, "rows_skipped": 0}
     
     try:
-        # Create SQLAlchemy engine for pandas compatibility
+        # Create SQLAlchemy engine
         engine = create_engine(
-            f'postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}'
+            f'postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}',
+            pool_pre_ping=True,
+            pool_recycle=300
         )
         
-        # First, check how many records exist in total
+        # Preprocess data with validation
+        processed_df = preprocess_dataframe(wrm_stations_data, context)
+        
+        if processed_df.empty:
+            context.log.warning("No valid records after preprocessing")
+            return {"rows_inserted": 0, "rows_skipped": len(wrm_stations_data)}
+        
+        # Get initial database state
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT COUNT(*) FROM bike_stations"))
-            total_existing = result.fetchone()[0]
+            total_existing = conn.execute(text("SELECT COUNT(*) FROM bike_stations")).fetchone()[0]
         
-        context.log.info(f"Total records currently in database: {total_existing}")
+        context.log.info(f"Database state: {total_existing:,} existing records, processing {len(processed_df):,} new records")
         
-        # Read existing records into DataFrame
-        existing_df = pd.read_sql("""
-            SELECT station_id, timestamp 
-            FROM bike_stations
-        """, engine)
+        # Use optimized bulk insert with staging table
+        rows_inserted = bulk_insert_with_staging(engine, processed_df, context)
         
-        context.log.info(f"Found {len(existing_df)} existing records in database")
-        context.log.info(f"Processing {len(wrm_stations_data)} records from source")
-        
-        # Prepare source data
-        source_data = wrm_stations_data.copy()
-        source_data['timestamp'] = pd.to_datetime(source_data['timestamp'])
-        
-        if not existing_df.empty:
-            # Convert timestamp columns to ensure proper comparison
-            existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
-            
-            # Use pandas merge to identify duplicates more reliably
-            # Add a marker to identify existing records
-            existing_df['exists'] = True
-            
-            # Merge to find which records already exist
-            merged = source_data.merge(
-                existing_df[['station_id', 'timestamp', 'exists']], 
-                on=['station_id', 'timestamp'], 
-                how='left'
-            )
-            
-            # Filter out records that already exist
-            new_records_df = merged[merged['exists'].isna()].copy()
-            new_records_df = new_records_df.drop('exists', axis=1)  # Remove marker column
-            
-            skipped_count = len(source_data) - len(new_records_df)
-        else:
-            # No existing records, all are new
-            new_records_df = source_data.copy()
-            skipped_count = 0
-        
-        context.log.info(f"Found {len(new_records_df)} new records to insert")
-        context.log.info(f"Skipping {skipped_count} existing records")
-        
-        # Insert new records using bulk insert with ON CONFLICT handling
-        if not new_records_df.empty:
-            # Ensure proper data types and handle NaN values
-            new_records_df = new_records_df.copy()
-            
-            # Handle numeric columns
-            numeric_cols = ['lat', 'lon', 'bikes', 'spaces', 'total_docks', 'pedelecs', 'timezone_1', 'timezone_2']
-            for col in numeric_cols:
-                if col in new_records_df.columns:
-                    new_records_df[col] = pd.to_numeric(new_records_df[col], errors='coerce')
-            
-            # Handle boolean columns
-            bool_cols = ['installed', 'locked', 'temporary']
-            for col in bool_cols:
-                if col in new_records_df.columns:
-                    new_records_df[col] = new_records_df[col].astype('boolean')
-            
-            # Handle timestamp columns
-            if 'processed_at' in new_records_df.columns:
-                new_records_df['processed_at'] = pd.to_datetime(new_records_df['processed_at'], errors='coerce')
-            
-            # Debug: Show a sample of what we're about to insert
-            context.log.info("Sample records to insert:")
-            sample_records = new_records_df[['station_id', 'timestamp']].head(3)
-            for _, row in sample_records.iterrows():
-                context.log.info(f"  station_id: {row['station_id']}, timestamp: {row['timestamp']}")
-            
-            # Use custom insertion method with ON CONFLICT DO NOTHING
-            rows_inserted = insert_with_conflict_handling(engine, new_records_df, context)
-            
-            context.log.info(f"Successfully inserted {rows_inserted} new records")
-        else:
-            rows_inserted = 0
-        
-        # Get final count using SQLAlchemy engine
+        # Get final count
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT COUNT(*) FROM bike_stations"))
-            total_records = result.fetchone()[0]
+            total_records = conn.execute(text("SELECT COUNT(*) FROM bike_stations")).fetchone()[0]
+        
+        rows_skipped = len(processed_df) - rows_inserted
+        
+        context.log.info(f"Load completed: {rows_inserted:,} inserted, {rows_skipped:,} skipped, {total_records:,} total records")
         
         engine.dispose()
         
         return {
             "rows_inserted": rows_inserted,
-            "rows_skipped": skipped_count,
+            "rows_skipped": rows_skipped,
             "total_records": total_records,
             "status": "completed"
         }
@@ -302,42 +241,104 @@ def load_stations_to_postgres(context: AssetExecutionContext, wrm_stations_data:
         context.log.error(f"Failed to load stations to PostgreSQL: {str(e)}")
         raise
 
-def insert_with_conflict_handling(engine, df, context):
+def bulk_insert_with_staging(engine, df, context):
     """
-    Insert DataFrame to PostgreSQL with ON CONFLICT DO NOTHING to handle duplicates safely.
+    Optimized bulk insert using temporary staging table with PostgreSQL COPY.
     """
     from sqlalchemy import text
+    import uuid
     
-    # Get the count before insertion
+    # Generate unique staging table name
+    staging_table = f"temp_bike_stations_{uuid.uuid4().hex[:8]}"
+    
+    # Get count before insertion
     with engine.connect() as conn:
         before_count = conn.execute(text("SELECT COUNT(*) FROM bike_stations")).fetchone()[0]
     
-    # Prepare the INSERT statement with ON CONFLICT DO NOTHING
-    columns = df.columns.tolist()
-    placeholders = ', '.join([f':{col}' for col in columns])
-    columns_str = ', '.join(columns)
-    
-    insert_sql = f"""
-    INSERT INTO bike_stations ({columns_str})
-    VALUES ({placeholders})
-    ON CONFLICT (station_id, timestamp) DO NOTHING
+    try:
+        with engine.begin() as conn:
+            # Create staging table with same structure as main table
+            conn.execute(text(f"""
+                CREATE TEMP TABLE {staging_table} 
+                (LIKE bike_stations INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+            """))
+            
+            # Use pandas to_sql with optimized parameters
+            df.to_sql(
+                name=staging_table,
+                con=conn,
+                if_exists='append',
+                index=False,
+                chunksize=5000,
+                method='multi'
+            )
+            
+            # Insert from staging to main table with conflict resolution
+            result = conn.execute(text(f"""
+                INSERT INTO bike_stations
+                SELECT * FROM {staging_table}
+                ON CONFLICT (station_id, timestamp) DO NOTHING
+            """))
+            
+            # Get final count
+            after_count = conn.execute(text("SELECT COUNT(*) FROM bike_stations")).fetchone()[0]
+            
+            rows_inserted = after_count - before_count
+            context.log.info(f"Staging table used: {staging_table}")
+            context.log.info(f"Records processed: {len(df)}, inserted: {rows_inserted}")
+            
+            return rows_inserted
+            
+    except Exception as e:
+        context.log.error(f"Bulk insert failed: {str(e)}")
+        raise
+
+def preprocess_dataframe(df, context):
     """
+    Prepare DataFrame with proper data types and validation.
+    """
+    # Create a copy to avoid modifying original
+    processed_df = df.copy()
     
-    # Convert DataFrame to list of dictionaries for bulk insert
-    records = df.to_dict('records')
+    # Data type conversions with explicit handling
+    processed_df['timestamp'] = pd.to_datetime(processed_df['timestamp'], utc=True).dt.tz_convert(None)
+    processed_df['station_id'] = processed_df['station_id'].astype('string').str.slice(0, 100)
     
-    # Execute bulk insert
-    with engine.connect() as conn:
-        conn.execute(text(insert_sql), records)
-        conn.commit()
-        
-        # Get count after insertion
-        after_count = conn.execute(text("SELECT COUNT(*) FROM bike_stations")).fetchone()[0]
+    # Handle numeric columns with proper null handling
+    numeric_cols = ['lat', 'lon', 'bikes', 'spaces', 'total_docks', 'pedelecs', 'timezone_1', 'timezone_2']
+    for col in numeric_cols:
+        if col in processed_df.columns:
+            processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce')
     
-    rows_inserted = after_count - before_count
-    context.log.info(f"Database records before: {before_count}, after: {after_count}")
+    # Handle boolean columns
+    bool_cols = ['installed', 'locked', 'temporary']
+    for col in bool_cols:
+        if col in processed_df.columns:
+            processed_df[col] = processed_df[col].astype('boolean')
     
-    return rows_inserted
+    # String length constraints
+    if 'name' in processed_df.columns:
+        processed_df['name'] = processed_df['name'].astype('string').str.slice(0, 200)
+    if 's3_source_key' in processed_df.columns:
+        processed_df['s3_source_key'] = processed_df['s3_source_key'].astype('string').str.slice(0, 500)
+    
+    # Deduplication with detailed logging
+    original_count = len(processed_df)
+    processed_df = processed_df.drop_duplicates(
+        subset=['station_id', 'timestamp'],
+        keep='last'
+    ).reset_index(drop=True)
+    
+    duplicates_removed = original_count - len(processed_df)
+    context.log.info(f"Data preprocessing: {original_count:,} → {len(processed_df):,} rows (removed {duplicates_removed:,} duplicates)")
+    
+    # Validation
+    null_primary_keys = processed_df[['station_id', 'timestamp']].isnull().any(axis=1).sum()
+    if null_primary_keys > 0:
+        context.log.warning(f"Found {null_primary_keys} rows with null primary key values")
+        processed_df = processed_df.dropna(subset=['station_id', 'timestamp'])
+    
+    return processed_df
 
 @asset(
     deps=[load_stations_to_postgres],
