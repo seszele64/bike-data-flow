@@ -11,6 +11,8 @@ from ..config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 
 @asset(
     name="wrm_stations_raw_data",
+    compute_kind="requests",
+    group_name="wrm_stations1",
     required_resource_keys={"s3_resource"}
 )
 def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
@@ -29,11 +31,11 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
         
         # Capture current time for consistency
         current_time = datetime.now()
-        timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+        timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S")
         date_partition = current_time.strftime("%Y-%m-%d")
         
         # Define S3 key for raw data
-        s3_key = f"{WRM_STATIONS_S3_PREFIX}raw/dt={date_partition}/station_data_{timestamp}.txt"
+        s3_key = f"{WRM_STATIONS_S3_PREFIX}raw/dt={date_partition}/wrm_stations_{timestamp}.txt"
         
         # Upload raw data to S3
         s3_client.put_object(
@@ -52,6 +54,9 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
 
 @asset(
     name="wrm_stations_processed",
+    deps=[wrm_stations_raw_data_asset],
+    compute_kind="pandas",
+    group_name="wrm_stations1",
     required_resource_keys={"s3_resource"}
 )
 def wrm_stations_processed_asset(context: AssetExecutionContext, wrm_stations_raw_data: str) -> str:
@@ -71,7 +76,36 @@ def wrm_stations_processed_asset(context: AssetExecutionContext, wrm_stations_ra
         # Parse CSV data
         df = pd.read_csv(StringIO(fixed_data))
         
-        # Add processing timestamp
+        # Process the data
+        df = df.rename(columns={'#id': 'station_id'})
+        
+        # Split the second column into multiple columns
+        second_col_name = df.columns[1]  # Get the name of the second column
+        
+        # Split the values and create new columns
+        split_data = df[second_col_name].str.split('|', expand=True)
+        
+        # Add the new columns to your dataframe
+        df['timestamp'] = pd.to_datetime(split_data[0], unit='s')  # Convert first value to datetime
+        df['timezone_1'] = split_data[1].astype(int)   # Second value as int
+        df['timezone_2'] = split_data[2].astype(int)   # Third value as int
+        
+        # Optional: drop the original column if you don't need it anymore
+        df = df.drop(columns=[second_col_name])
+        
+        # move timestamp as 2nd column
+        df = df[['station_id', 'timestamp'] + [col for col in df.columns if col not in ['station_id', 'timestamp']]]
+        
+        # Extract date from the timestamp column (format: 2025-06-08 11:20:14.083158731)
+        # Get the first timestamp value and extract date
+        if not df.empty and 'timestamp' in df.columns:
+            data_date = df['timestamp'].iloc[0].strftime('%Y-%m-%d')
+        else:
+            # Fallback to current date if no timestamp found
+            data_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Add date and processing timestamp
+        df['date'] = data_date
         df['processed_at'] = datetime.now()
         
         # Generate S3 key for processed data
