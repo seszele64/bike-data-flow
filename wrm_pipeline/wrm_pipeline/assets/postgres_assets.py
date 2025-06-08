@@ -182,17 +182,17 @@ def bike_failures_table(context: AssetExecutionContext):
         raise
 
 @asset(
-    deps=[bike_stations_table, "wrm_stations_data"],
+    deps=[bike_stations_table, "wrm_stations_daily_deduplicated"],
     group_name="database",
     compute_kind="postgresql",
     required_resource_keys={"s3_resource"}
 )
-def load_stations_to_postgres(context: AssetExecutionContext, wrm_stations_data: pd.DataFrame):
+def load_stations_to_postgres(context: AssetExecutionContext, wrm_stations_daily_deduplicated: pd.DataFrame):
     """
     Loads new station data from deduplicated DataFrame to PostgreSQL.
     Uses optimized staging table approach for efficient bulk insertion.
     """
-    if wrm_stations_data.empty:
+    if wrm_stations_daily_deduplicated.empty:
         context.log.info("No station data to load")
         return {"rows_inserted": 0, "rows_skipped": 0}
     
@@ -205,11 +205,11 @@ def load_stations_to_postgres(context: AssetExecutionContext, wrm_stations_data:
         )
         
         # Preprocess data with validation
-        processed_df = preprocess_dataframe(wrm_stations_data, context)
+        processed_df = preprocess_dataframe(wrm_stations_daily_deduplicated, context)
         
         if processed_df.empty:
             context.log.warning("No valid records after preprocessing")
-            return {"rows_inserted": 0, "rows_skipped": len(wrm_stations_data)}
+            return {"rows_inserted": 0, "rows_skipped": len(wrm_stations_daily_deduplicated)}
         
         # Get initial database state
         with engine.connect() as conn:
