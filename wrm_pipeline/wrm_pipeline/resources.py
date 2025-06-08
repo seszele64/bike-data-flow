@@ -3,6 +3,14 @@ from dagster import ConfigurableResource, EnvVar
 from pydantic import Field
 from minio import Minio
 from minio.error import S3Error
+from contextlib import contextmanager
+import psycopg2
+from dagster_aws.s3.resources import S3Resource
+
+from .config import (
+    POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD,
+    S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION_NAME
+)
 
 class MinIOResource(ConfigurableResource):
     """MinIO resource for MinIO-specific functionality"""
@@ -46,3 +54,43 @@ class MinIOResource(ConfigurableResource):
         except S3Error as e:
             logger.error(f"Error checking or creating bucket '{bucket_name}': {e}")
             raise
+
+class PostgreSQLResource(ConfigurableResource):
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    
+    @contextmanager
+    def get_connection(self):
+        conn = psycopg2.connect(
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            password=self.password
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+postgres_resource = PostgreSQLResource(
+    host=POSTGRES_HOST,
+    port=POSTGRES_PORT,
+    database=POSTGRES_DB,
+    user=POSTGRES_USER,
+    password=POSTGRES_PASSWORD
+)
+
+# Determine if a region name is configured and should be passed
+s3_resource_config = {
+    "endpoint_url": S3_ENDPOINT_URL,
+    "aws_access_key_id": S3_ACCESS_KEY_ID,
+    "aws_secret_access_key": S3_SECRET_ACCESS_KEY,
+    "region_name": S3_REGION_NAME
+}
+
+s3_resource = S3Resource(**s3_resource_config)
