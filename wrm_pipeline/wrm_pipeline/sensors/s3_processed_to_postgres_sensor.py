@@ -4,7 +4,7 @@ from ..config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 # Define asset job for the WRM stations pipeline
 wrm_stations_job = define_asset_job(
     name="wrm_stations_etl_job",
-    selection="wrm_stations_postgres"  # This will include all upstream dependencies
+    selection="bike_stations_table"  # This will include all upstream dependencies
 )
 
 @sensor(
