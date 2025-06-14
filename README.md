@@ -15,6 +15,7 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 ### Core Technologies
 - **Dagster**: Data orchestration and pipeline management
 - **PostgreSQL**: Primary data warehouse for processed station data
+- **Docker**: Containerized PostgreSQL deployment
 - **AWS S3**: Object storage for raw and processed data files
 - **DuckDB**: High-performance analytical processing for deduplication
 - **Pandas**: Data manipulation and transformation
@@ -99,6 +100,46 @@ PostgreSQL → Summary Statistics
 - Processing success rates
 ```
 
+## 🐳 Database Infrastructure
+
+### PostgreSQL Docker Setup
+
+The project includes a containerized PostgreSQL setup for local development and testing:
+
+#### Database Structure
+```
+postgres-db/
+├── docker-compose.yml          # Docker Compose configuration
+├── Dockerfile                  # Custom PostgreSQL image
+└── init.sql                   # Database initialization script
+```
+
+#### Features
+- **Containerized Deployment**: Docker-based PostgreSQL instance
+- **Environment Configuration**: Configurable via `.env` file
+- **Database Initialization**: Automatic schema setup via [`init.sql`](postgres-db/init.sql)
+- **Port Exposure**: Standard PostgreSQL port (5432) exposed
+- **Latest PostgreSQL**: Uses `postgres:latest` base image
+
+#### Quick Start
+```bash
+# Navigate to database directory
+cd postgres-db/
+
+# Start PostgreSQL container
+docker-compose up -d
+
+# View logs
+docker-compose logs postgres
+```
+
+#### Configuration
+Database credentials and settings are managed through environment variables:
+- Database connection parameters
+- User credentials
+- Initial database setup
+- Custom initialization scripts
+
 ## 🔍 Automated Monitoring & Sensors
 
 The pipeline includes intelligent sensors that monitor S3 for new data and automatically trigger processing:
@@ -182,19 +223,25 @@ The sensors work together to create a fully automated pipeline:
 ## 📁 Project Structure
 
 ```
-wrm_pipeline/
-├── assets/
-│   ├── __init__.py              # Asset imports and exports
-│   ├── assets.py               # Central asset aggregator
-│   ├── stations.py             # Raw data ingestion from API
-│   ├── raw_stations.py         # Raw data processing and batch operations
-│   ├── stations_deduplicated.py # DuckDB-powered deduplication
-│   └── postgres_assets.py      # Database operations and analytics
-├── sensors/
-│   ├── __init__.py             # Sensor imports and exports
-│   ├── stations_sensor.py      # Raw data monitoring sensor
-│   └── s3_processed_to_postgres_sensor.py # Processed data monitoring sensor
-└── config.py                   # Configuration management
+bike-data-flow/
+├── wrm_pipeline/
+│   ├── assets/
+│   │   ├── __init__.py              # Asset imports and exports
+│   │   ├── assets.py               # Central asset aggregator
+│   │   ├── stations.py             # Raw data ingestion from API
+│   │   ├── raw_stations.py         # Raw data processing and batch operations
+│   │   ├── stations_deduplicated.py # DuckDB-powered deduplication
+│   │   └── postgres_assets.py      # Database operations and analytics
+│   ├── sensors/
+│   │   ├── __init__.py             # Sensor imports and exports
+│   │   ├── stations_sensor.py      # Raw data monitoring sensor
+│   │   └── s3_processed_to_postgres_sensor.py # Processed data monitoring sensor
+│   └── config.py                   # Configuration management
+├── postgres-db/
+│   ├── docker-compose.yml          # PostgreSQL container orchestration
+│   ├── Dockerfile                  # Custom PostgreSQL image
+│   └── init.sql                   # Database initialization script
+└── README.md                       # Project documentation
 ```
 
 ## 🚀 Key Features
@@ -215,6 +262,12 @@ wrm_pipeline/
 - Parquet format for efficient storage
 - Batch processing capabilities
 - Connection pooling for database operations
+
+### **Containerized Infrastructure**
+- Docker-based PostgreSQL deployment
+- Environment-based configuration
+- Easy local development setup
+- Production-ready database container
 
 ### **Automated Monitoring & Orchestration**
 - Real-time S3 file monitoring
@@ -271,10 +324,35 @@ The pipeline provides comprehensive monitoring through:
 
 ## 🚦 Getting Started
 
-1. **Configure Resources**: Set up S3, PostgreSQL connections
-2. **Deploy Sensors**: Enable automatic monitoring sensors
-3. **Run Initial Backfill**: Process historical data using partitions
-4. **Monitor Pipeline**: Use Dagster UI for real-time observability
-5. **Scale Operations**: Sensors automatically handle new data as it arrives
+### 1. **Setup Database**
+```bash
+# Start PostgreSQL container
+cd postgres-db/
+docker-compose up -d
+```
 
-This pipeline efficiently handles the complete lifecycle of bike-sharing data from ingestion to analytics, with intelligent automation that ensures data flows seamlessly from source to destination without manual intervention.
+### 2. **Configure Resources**
+- Set up S3 connections and credentials
+- Configure database connection parameters
+- Set environment variables
+
+### 3. **Deploy Pipeline**
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Launch Dagster UI
+dagster-webserver -f wrm_pipeline
+```
+
+### 4. **Enable Automation**
+- Deploy sensors for automatic monitoring
+- Run initial data backfill using partitions
+- Monitor pipeline through Dagster UI
+
+### 5. **Scale Operations**
+- Sensors automatically handle new data as it arrives
+- Monitor performance and data quality metrics
+- Scale resources based on processing demands
+
+This pipeline efficiently handles the complete lifecycle of bike-sharing data from ingestion to analytics, with containerized infrastructure and intelligent automation that ensures data flows seamlessly from source to destination without manual intervention.
