@@ -43,13 +43,12 @@ from .iceberg_assets import (
 __all__ = [
     # Station assets
     "wrm_stations_raw_data_asset",
+    "wrm_stations_validated_data_asset",
     "wrm_stations_all_processed_asset",
     "wrm_stations_data_asset",
     "wrm_bikes_data_asset",
-    # Deduplicated station assets
-    "wrm_stations_deduplicated_asset",
-    "deduplication_quality_report_asset",
-    # PostgreSQL assets
+    "s3_processed_stations_list",
+    "wrm_stations_daily_deduplicated",
     "postgres_connection",
     "bike_stations_table",
     "bike_failures_table",
