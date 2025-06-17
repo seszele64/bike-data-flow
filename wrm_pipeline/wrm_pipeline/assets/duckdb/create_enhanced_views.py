@@ -1,7 +1,7 @@
 from dagster import asset, AssetExecutionContext
 import duckdb
 import os
-from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT_URL, BUCKET_NAME, WRM_STATIONS_S3_PREFIX
+from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT_URL, BUCKET_NAME, WRM_STATIONS_S3_PREFIX, db_path
 
 @asset(
     name="duckdb_enhanced_views",
@@ -10,8 +10,6 @@ from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_
 )
 def create_duckdb_enhanced_views(context: AssetExecutionContext) -> str:
     """Create DuckDB views for enhanced WRM stations data"""
-    
-    db_path = os.path.join(os.path.expanduser("~"), "data", "analytics.duckdb")
     
     with duckdb.connect(db_path) as conn:
         # Install and load required extensions

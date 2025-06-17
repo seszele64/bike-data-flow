@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple
 
 from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT
 from .create_enhanced_views import create_duckdb_enhanced_views
+from ...config import db_path
 
 @asset(
     name="bike_density_spatial_analysis",
@@ -19,8 +20,6 @@ def bike_density_spatial_analysis(context: AssetExecutionContext, duckdb_enhance
     """
     Analyze bike density in 1000m² grid squares using spatial analysis
     """
-    
-    db_path = os.path.join(os.path.expanduser("~"), "data", "analytics.duckdb")
     
     with duckdb.connect(db_path) as conn:
         # Configure S3 credentials

@@ -2,9 +2,8 @@ from dagster import asset, AssetExecutionContext
 import duckdb
 import os
 
-from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT
+from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT, db_path
 from .create_enhanced_views import create_duckdb_enhanced_views
-
 
 @asset(
     name="station_summary",
@@ -13,8 +12,6 @@ from .create_enhanced_views import create_duckdb_enhanced_views
 )
 def query_station_summary(context: AssetExecutionContext, duckdb_enhanced_views: str) -> dict:
     """Query station summary from DuckDB views"""
-    
-    db_path = os.path.join(os.path.expanduser("~"), "data", "analytics.duckdb")
     
     with duckdb.connect(db_path) as conn:
         # Configure S3 credentials for querying views
