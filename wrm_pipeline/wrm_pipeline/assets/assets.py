@@ -20,6 +20,7 @@ from .duckdb import (
     bike_density_map
 )
 
+# Re-export all assets
 __all__ = [
     # Station assets
     "wrm_stations_raw_data_asset",

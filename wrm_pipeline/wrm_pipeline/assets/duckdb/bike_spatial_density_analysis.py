@@ -6,9 +6,8 @@ import math
 from geopy.distance import geodesic
 from typing import Dict, List, Tuple
 
-from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT
+from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT, db_path
 from .create_enhanced_views import create_duckdb_enhanced_views
-from ...config import db_path
 
 @asset(
     name="bike_density_spatial_analysis",
