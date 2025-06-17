@@ -3,8 +3,6 @@ import os
 from dotenv import load_dotenv
 
 from .assets import assets
-from .sensors.stations_sensor import s3_raw_stations_sensor
-from .sensors.s3_processed_to_postgres_sensor import s3_processed_stations_sensor
 from .resources import (
     s3_resource,
     postgres_resource,
@@ -24,7 +22,6 @@ all_assets = load_assets_from_modules([assets])
 
 defs = Definitions(
     assets=all_assets,
-    sensors=[s3_raw_stations_sensor, s3_processed_stations_sensor],
     resources={
         "s3_resource": s3_resource,
         "s3": s3_resource,  # Add this - s3_io_manager expects key "s3"
