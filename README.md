@@ -100,7 +100,7 @@ s3://bucket/bike-data/gen_info/
 ```
 
 ### DuckDB Analytics Database
-- **Location**: `~/data/analytics.duckdb`
+- **Location**: `db/analytics.duckdb` (relative to project root)
 - **Views**: Enhanced data views for querying and analysis
 - **S3 Integration**: Direct querying of S3-stored Parquet files
 - **Performance**: Optimized for analytical workloads
@@ -225,7 +225,8 @@ GROUP BY record_type;
 import duckdb
 import os
 
-db_path = os.path.join(os.path.expanduser("~"), "data", "analytics.duckdb")
+# Database path relative to project root
+db_path = os.path.join(os.path.dirname(__file__), 'db', 'analytics.duckdb')
 
 with duckdb.connect(db_path) as conn:
     # Configure S3 credentials
