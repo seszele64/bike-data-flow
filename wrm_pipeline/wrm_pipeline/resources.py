@@ -1,15 +1,19 @@
 import os
-from dagster import ConfigurableResource, EnvVar
+from dagster import ConfigurableResource, EnvVar, io_manager
 from pydantic import Field
 from minio import Minio
 from minio.error import S3Error
 from contextlib import contextmanager
 import psycopg2
 from dagster_aws.s3.resources import S3Resource
+from dagster_iceberg.config import IcebergCatalogConfig
+from dagster_iceberg.io_manager.pandas import PandasIcebergIOManager  # <- Changed
+
 
 from .config import (
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD,
-    S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION_NAME
+    S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
+    S3_REGION_NAME, BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 )
 
 class MinIOResource(ConfigurableResource):
@@ -90,7 +94,58 @@ s3_resource_config = {
     "endpoint_url": S3_ENDPOINT_URL,
     "aws_access_key_id": S3_ACCESS_KEY_ID,
     "aws_secret_access_key": S3_SECRET_ACCESS_KEY,
-    "region_name": S3_REGION_NAME
+    "region_name": S3_REGION_NAME,
+    "s3_path_style_access": True,  # Use path-style access for MinIO compatibility
+    "bucket_name": BUCKET_NAME,
 }
 
 s3_resource = S3Resource(**s3_resource_config)
+
+
+# --- ICEBERG ---
+
+from pyiceberg.catalog import load_catalog
+from dagster import ConfigurableIOManager
+
+
+# create the Iceberg catalog if it does not exist
+catalog = load_catalog(
+    "default",
+    type="sql",
+    uri=f"sqlite:///{os.path.expanduser('~')}/iceberg_catalog.db", 
+    warehouse=f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}iceberg/",
+    s3_endpoint=S3_ENDPOINT_URL,
+    s3_access_key_id=S3_ACCESS_KEY_ID,
+    s3_secret_access_key=S3_SECRET_ACCESS_KEY,
+    s3_path_style_access=True,
+)
+
+catalog.create_namespace_if_not_exists("default")
+
+# Create the IO manager as a resource
+@io_manager
+def create_iceberg_io_manager():
+    return PandasIcebergIOManager(
+        name="default",
+        config=IcebergCatalogConfig(
+            properties={
+                "type": "sql",
+                "uri": f"sqlite:///{os.path.expanduser('~')}/iceberg_catalog.db", 
+                "warehouse": f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}iceberg/",
+                "s3.endpoint": S3_ENDPOINT_URL,
+                "s3.access-key-id": S3_ACCESS_KEY_ID,
+                "s3.secret-access-key": S3_SECRET_ACCESS_KEY,
+                "s3.path-style-access": "true",
+                "write.spark.accept-any-schema": "true",  # Critical Iceberg property
+                "commit.retry.num-retries": "5",  # Increased from default [3]
+                "commit.retry.min-wait-ms": "1000",
+                "commit.retry.max-wait-ms": "5000",
+                "write.metadata.delete-after-commit.enabled": "true"  # Cleanup old metadata [3]
+
+            },
+        ),
+        namespace="default",
+        schema_update_mode="merge",
+    )
+
+iceberg_io_manager = create_iceberg_io_manager()
