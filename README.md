@@ -5,8 +5,8 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 ## 🎯 Goals
 
 - **Real-time Data Ingestion**: Automatically fetch bike station data from WRM API
-- **Data Processing & Transformation**: Clean, process, and deduplicate raw station data
-- **Data Storage & Analytics**: Store processed data in PostgreSQL with efficient partitioning
+- **Data Processing & Transformation**: Clean, process, and enhance raw station data
+- **Data Storage & Analytics**: Store processed data in S3 and provide DuckDB analytics views
 - **Data Quality & Monitoring**: Provide comprehensive summaries and processing statistics
 - **Scalable Architecture**: Handle large volumes of historical and real-time bike station data
 
@@ -14,47 +14,42 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 
 ### Core Technologies
 - **Dagster**: Data orchestration and pipeline management
-- **PostgreSQL**: Primary data warehouse for processed station data
-- **Docker**: Containerized PostgreSQL deployment
-- **AWS S3**: Object storage for raw and processed data files
-- **DuckDB**: High-performance analytical processing for deduplication
+- **S3-Compatible Storage**: Object storage for raw, processed, and enhanced data files
+- **DuckDB**: High-performance analytical processing and querying
+- **Apache Iceberg**: Modern table format for enhanced data management
 - **Pandas**: Data manipulation and transformation
 
 ### Supporting Libraries
-- **SQLAlchemy**: Database ORM and connection management
-- **psycopg2**: PostgreSQL database adapter
+- **requests**: HTTP API calls for data ingestion
 - **ftfy**: Text encoding fixes
-- **requests**: HTTP API calls
+- **pandera**: Data validation and schema enforcement
+- **pydantic**: Data modeling and validation
 
 ## 📊 Data Flow Architecture
 
 ### Pipeline Overview
 ```
-WRM API → Raw Data (S3) → Processing → Deduplication → PostgreSQL → Analytics
+WRM API → Raw Data (S3) → Processing → Enhancement → Analytics (DuckDB)
 ```
 
 ### Asset Groups
 
-#### 1. **Raw Data Ingestion** (`wrm_stations_raw`)
-- [`wrm_stations_raw_data_asset`](wrm_pipeline/wrm_pipeline/assets/stations.py): Downloads fresh data from WRM API
-- [`s3_raw_stations_list`](wrm_pipeline/wrm_pipeline/assets/raw_stations.py): Lists all raw files in S3
-- [`wrm_raw_stations_data`](wrm_pipeline/wrm_pipeline/assets/raw_stations.py): Combines multiple raw files into DataFrame
+#### 1. **Data Acquisition** (`wrm_data_acquisition`)
+- [`wrm_stations_raw_data`](wrm_pipeline/wrm_pipeline/assets/stations/raw_all.py): Downloads fresh data from WRM API with deduplication
 
-#### 2. **Data Processing** (`wrm_stations1`, `wrm_stations_raw`)
-- [`wrm_stations_processed_asset`](wrm_pipeline/wrm_pipeline/assets/stations.py): Processes raw data and converts to Parquet
-- [`wrm_stations_batch_processor`](wrm_pipeline/wrm_pipeline/assets/raw_stations.py): Batch processes multiple raw files
-- [`wrm_stations_processing_summary`](wrm_pipeline/wrm_pipeline/assets/raw_stations.py): Provides processing pipeline statistics
+#### 2. **Data Processing** (`wrm_data_processing`) 
+- [`wrm_stations_processed_data_all`](wrm_pipeline/wrm_pipeline/assets/stations/processed_all.py): Processes raw data and converts to Parquet with validation
 
-#### 3. **Deduplication** (`wrm_stations`)
-- [`s3_processed_stations_list`](wrm_pipeline/wrm_pipeline/assets/stations_deduplicated.py): Lists processed files for deduplication
-- [`wrm_stations_daily_deduplicated`](wrm_pipeline/wrm_pipeline/assets/stations_deduplicated.py): Daily partitioned deduplication using DuckDB
+#### 3. **Enhanced Data** (`enhanced_data`)
+- [`wrm_stations_enhanced_data_all`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_all.py): Creates enhanced datasets with metadata enrichment
+- [`daily_station_data`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_station_data.py): Daily partitioned station-only data with Iceberg support
+- [`daily_bike_data`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_bike_data.py): Daily partitioned bike-only data
 
-#### 4. **Database Operations** (`database`)
-- [`postgres_connection`](wrm_pipeline/wrm_pipeline/assets/postgres_assets.py): Database connection management
-- [`bike_stations_table`](wrm_pipeline/wrm_pipeline/assets/postgres_assets.py): Creates/manages bike stations table
-- [`bike_failures_table`](wrm_pipeline/wrm_pipeline/assets/postgres_assets.py): Creates failure tracking table
-- [`load_stations_to_postgres`](wrm_pipeline/wrm_pipeline/assets/postgres_assets.py): Loads deduplicated data to PostgreSQL
-- [`stations_data_summary`](wrm_pipeline/wrm_pipeline/assets/postgres_assets.py): Generates partition-aware analytics
+#### 4. **Analytics Views** (`analytics_views`)
+- [`duckdb_enhanced_views`](wrm_pipeline/wrm_pipeline/assets/duckdb/create_enhanced_views.py): Creates DuckDB views for enhanced data analysis
+- [`station_summary`](wrm_pipeline/wrm_pipeline/assets/duckdb/query_station_summary.py): Generates station summary statistics
+- [`bike_density_spatial_analysis`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Spatial density analysis for bike distribution
+- [`bike_density_map`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Interactive density mapping
 
 ## 🔄 Data Processing Flow
 
@@ -64,6 +59,7 @@ WRM API → S3 Raw Storage (Partitioned by date)
 - Format: Text files with CSV data
 - Partition: dt=YYYY-MM-DD/
 - Encoding: UTF-8 with automatic fixing
+- Deduplication: Hash-based duplicate detection
 ```
 
 ### 2. **Data Processing**
@@ -71,154 +67,73 @@ WRM API → S3 Raw Storage (Partitioned by date)
 Raw Data → Processed Data (Parquet)
 - Column splitting and type conversion
 - Timestamp normalization
-- Data validation and cleaning
+- Data validation with Pandera schemas
 - Parquet optimization for analytics
 ```
 
-### 3. **Deduplication**
+### 3. **Data Enhancement**
 ```python
-Processed Files → Daily Deduplicated Data
-- DuckDB-powered efficient deduplication
-- Partition-aware processing
-- Memory-optimized operations
+Processed Files → Enhanced Data
+- Metadata enrichment (file timestamps, processing dates)
+- Record type classification (station vs bike data)
+- Daily partitioning for efficient access
+- Apache Iceberg table format support
 ```
 
-### 4. **Database Loading**
+### 4. **Analytics & Views**
 ```python
-Deduplicated Data → PostgreSQL
-- Partition-aware upsert operations
-- Conflict resolution (station_id + timestamp)
-- Performance optimized bulk loading
+Enhanced Data → DuckDB Views
+- High-performance analytical views
+- Station-only and bike-only filtered views
+- Latest station status views
+- Spatial analysis capabilities
 ```
 
-### 5. **Analytics & Monitoring**
-```python
-PostgreSQL → Summary Statistics
-- Daily partition summaries
-- Top stations analysis
-- Data quality metrics
-- Processing success rates
+## 🗄️ Data Storage Architecture
+
+### S3 Storage Structure
+```
+s3://bucket/bike-data/gen_info/
+├── raw/dt=YYYY-MM-DD/           # Raw API data files
+├── processed/all/dt=YYYY-MM-DD/ # Processed Parquet files
+└── enhanced/all/dt=YYYY-MM-DD/  # Enhanced datasets with metadata
 ```
 
-## 🐳 Database Infrastructure
+### DuckDB Analytics Database
+- **Location**: `db/analytics.duckdb` (relative to project root)
+- **Views**: Enhanced data views for querying and analysis
+- **S3 Integration**: Direct querying of S3-stored Parquet files
+- **Performance**: Optimized for analytical workloads
 
-### PostgreSQL Docker Setup
+## 📊 DuckDB Analytics Views
 
-The project includes a containerized PostgreSQL setup for local development and testing:
+### Available Views
 
-#### Database Structure
-```
-postgres-db/
-├── docker-compose.yml          # Docker Compose configuration
-├── Dockerfile                  # Custom PostgreSQL image
-└── init.sql                   # Database initialization script
-```
+#### 1. **wrm_stations_enhanced_data**
+- **Description**: Main view containing all enhanced data (stations and bikes)
+- **Source**: S3 Parquet files from enhanced dataset
+- **Ordering**: Sorted by date DESC, file_timestamp DESC, station_id
 
-#### Features
-- **Containerized Deployment**: Docker-based PostgreSQL instance
-- **Environment Configuration**: Configurable via `.env` file
-- **Database Initialization**: Automatic schema setup via [`init.sql`](postgres-db/init.sql)
-- **Port Exposure**: Standard PostgreSQL port (5432) exposed
-- **Latest PostgreSQL**: Uses `postgres:latest` base image
+#### 2. **wrm_stations_only**
+- **Description**: Filtered view showing only station records
+- **Filter**: `record_type = 'station'`
+- **Use case**: Station-level analysis (capacity, location, status)
 
-#### Quick Start
-```bash
-# Navigate to database directory
-cd postgres-db/
+#### 3. **wrm_bikes_only**
+- **Description**: Filtered view showing only bike records
+- **Filter**: `record_type = 'bike'`
+- **Use case**: Individual bike tracking and movement analysis
 
-# Start PostgreSQL container
-docker-compose up -d
+#### 4. **wrm_stations_latest**
+- **Description**: Latest snapshot of each station
+- **Logic**: ROW_NUMBER() to get most recent record per station_id
+- **Use case**: Current state analysis, real-time dashboards
 
-# View logs
-docker-compose logs postgres
-```
-
-#### Configuration
-Database credentials and settings are managed through environment variables:
-- Database connection parameters
-- User credentials
-- Initial database setup
-- Custom initialization scripts
-
-## 🔍 Automated Monitoring & Sensors
-
-The pipeline includes intelligent sensors that monitor S3 for new data and automatically trigger processing:
-
-### Sensor Architecture
-```
-S3 Raw Files → Raw Sensor → Processing → S3 Processed Files → Processed Sensor → Database Loading
-```
-
-### Active Sensors
-
-#### 1. **Raw Data Sensor** (`s3_raw_stations_sensor`)
-- **File**: [`stations_sensor.py`](wrm_pipeline/wrm_pipeline/sensors/stations_sensor.py)
-- **Monitoring**: S3 bucket for new raw `.txt` files
-- **Frequency**: Every 60 seconds
-- **Triggers**: [`wrm_stations_processed`] asset materialization
-- **Features**:
-  - Cursor-based tracking to avoid reprocessing
-  - Unique run identification using S3 keys
-  - Comprehensive error handling and logging
-  - Batch processing of multiple new files
-
-#### 2. **Processed Data Sensor** (`s3_processed_stations_sensor`)
-- **File**: [`s3_processed_to_postgres_sensor.py`](wrm_pipeline/wrm_pipeline/sensors/s3_processed_to_postgres_sensor.py)
-- **Monitoring**: S3 bucket for new processed `.parquet` files
-- **Frequency**: Every 120 seconds (2 minutes)
-- **Triggers**: [`wrm_stations_etl_job`] containing `bike_stations_table` and dependencies
-- **Features**:
-  - Automatic database loading when new processed files arrive
-  - Latest file tracking with cursor management
-  - Rich metadata tagging for run tracking
-  - Error resilience with detailed logging
-
-### Sensor Features
-
-#### **Intelligent File Detection**
-```python
-# Raw sensor monitors for new .txt files
-if key.endswith('.txt'):
-    if last_processed_key is None or key > last_processed_key:
-        txt_files.append(key)
-
-# Processed sensor monitors for new .parquet files  
-if key.endswith('.parquet'):
-    if last_processed_key is None or key > last_processed_key:
-        new_files.append(key)
-```
-
-#### **Cursor-Based State Management**
-- Sensors maintain state using Dagster cursors
-- Prevents reprocessing of already handled files
-- Enables incremental processing from last checkpoint
-- Automatic recovery from sensor restarts
-
-#### **Error Handling & Resilience**
-```python
-try:
-    # S3 monitoring logic
-    response = s3_client.list_objects_v2(Bucket=BUCKET_NAME, Prefix=s3_prefix)
-    # Processing logic...
-except Exception as e:
-    context.log.error(f"Error checking S3: {e}")
-    return SkipReason(f"Error checking S3: {str(e)}")
-```
-
-#### **Rich Metadata & Tagging**
-- Each sensor run includes comprehensive tags
-- S3 bucket and key information
-- File count and processing metadata
-- Unique run identification for tracking
-
-### Sensor Coordination
-
-The sensors work together to create a fully automated pipeline:
-
-1. **Raw Sensor**: Detects new data files → Triggers processing
-2. **Processed Sensor**: Detects processed files → Triggers database loading
-3. **Automatic Backfill**: Handles historical data gaps automatically
-4. **State Recovery**: Resumes from last successful checkpoint
+### Analytics Capabilities
+- **Station Summary Statistics**: Total records, latest station status
+- **Spatial Density Analysis**: Bike distribution mapping
+- **Temporal Analysis**: Historical trends and patterns
+- **Real-time Monitoring**: Current station and bike availability
 
 ## 📁 Project Structure
 
@@ -226,117 +141,111 @@ The sensors work together to create a fully automated pipeline:
 bike-data-flow/
 ├── wrm_pipeline/
 │   ├── assets/
-│   │   ├── __init__.py              # Asset imports and exports
-│   │   ├── assets.py               # Central asset aggregator
-│   │   ├── stations.py             # Raw data ingestion from API
-│   │   ├── raw_stations.py         # Raw data processing and batch operations
-│   │   ├── stations_deduplicated.py # DuckDB-powered deduplication
-│   │   └── postgres_assets.py      # Database operations and analytics
-│   ├── sensors/
-│   │   ├── __init__.py             # Sensor imports and exports
-│   │   ├── stations_sensor.py      # Raw data monitoring sensor
-│   │   └── s3_processed_to_postgres_sensor.py # Processed data monitoring sensor
-│   └── config.py                   # Configuration management
-├── postgres-db/
-│   ├── docker-compose.yml          # PostgreSQL container orchestration
-│   ├── Dockerfile                  # Custom PostgreSQL image
-│   └── init.sql                   # Database initialization script
-└── README.md                       # Project documentation
+│   │   ├── stations/
+│   │   │   ├── __init__.py
+│   │   │   ├── commons.py              # Shared utilities and partitions
+│   │   │   ├── raw_all.py              # Raw data ingestion from API
+│   │   │   ├── processed_all.py        # Data processing and validation
+│   │   │   ├── enhanced_all.py         # Data enhancement and metadata
+│   │   │   ├── enhanced_station_data.py # Station-only enhanced data
+│   │   │   └── enhanced_bike_data.py   # Bike-only enhanced data
+│   │   ├── duckdb/
+│   │   │   ├── __init__.py
+│   │   │   ├── create_enhanced_views.py # DuckDB view creation
+│   │   │   ├── query_station_summary.py # Station summary queries
+│   │   │   ├── bike_spatial_density_analysis.py # Spatial analysis
+│   │   │   └── README.md               # DuckDB usage documentation
+│   │   └── __init__.py
+│   ├── models/
+│   │   └── stations.py                 # Data models and schemas
+│   └── config.py                       # Configuration management
+└── README.md                           # Project documentation
 ```
 
 ## 🚀 Key Features
 
-### **Partitioned Processing**
-- Daily partitions for efficient data management
-- Partition-aware upsert operations
-- Scalable historical data processing
+### **Intelligent Data Ingestion**
+- Hash-based duplicate detection to avoid redundant API calls
+- Automatic encoding issue detection and fixing
+- Robust error handling and retry logic
+- S3-based raw data persistence
+
+### **Comprehensive Data Processing**
+- Pydantic and Pandera-based data validation
+- Type conversion and data cleaning
+- Partition-aware processing for scalability
+- Parquet optimization for analytical performance
+
+### **Enhanced Data Management**
+- Apache Iceberg support for advanced table management
+- Metadata enrichment with processing timestamps
+- Record type classification and filtering
+- Daily partitioning for efficient data access
+
+### **High-Performance Analytics**
+- DuckDB-powered analytical views
+- Direct S3 Parquet file querying
+- Spatial analysis capabilities
+- Real-time dashboard support
 
 ### **Data Quality Assurance**
-- Encoding issue detection and fixing
-- Duplicate record identification and removal
-- Data validation and type checking
+- Schema validation at multiple pipeline stages
+- Duplicate detection and handling
+- Data lineage tracking
 - Processing success monitoring
-
-### **Performance Optimization**
-- DuckDB for high-performance analytics
-- Parquet format for efficient storage
-- Batch processing capabilities
-- Connection pooling for database operations
-
-### **Containerized Infrastructure**
-- Docker-based PostgreSQL deployment
-- Environment-based configuration
-- Easy local development setup
-- Production-ready database container
-
-### **Automated Monitoring & Orchestration**
-- Real-time S3 file monitoring
-- Automatic pipeline triggering
-- State management and recovery
-- Comprehensive error handling
-
-### **Monitoring & Observability**
-- Comprehensive logging throughout pipeline
-- Processing statistics and metadata
-- Success/failure tracking
-- Data lineage visualization in Dagster UI
-
-## 📈 Data Schema
-
-### Bike Stations Table
-```sql
-bike_stations (
-    id UUID PRIMARY KEY,
-    station_id INTEGER,
-    timestamp TIMESTAMP,
-    name TEXT,
-    bikes INTEGER,
-    spaces INTEGER,
-    date DATE,
-    processed_at TIMESTAMP,
-    timezone_1 INTEGER,
-    timezone_2 INTEGER
-)
-```
-
-### Partitioning Strategy
-- **S3**: Date-based partitioning (`dt=YYYY-MM-DD`)
-- **PostgreSQL**: Efficient indexing on `station_id` and `timestamp`
-- **Dagster**: Daily partitions starting from 2025-05-10
 
 ## 🔧 Configuration
 
 Key configuration parameters are managed in [`config.py`](wrm_pipeline/wrm_pipeline/config.py):
-- Database connection settings
 - S3 bucket and prefix configurations
-- API endpoints
+- API endpoints and credentials
 - Processing parameters
-- Sensor intervals and monitoring settings
+- DuckDB connection settings
 
-## 📊 Monitoring & Analytics
+## 📊 Usage Examples
 
-The pipeline provides comprehensive monitoring through:
-- **Real-time Processing Stats**: Track success/failure rates
-- **Data Quality Metrics**: Monitor duplicates, missing data, encoding issues
-- **Performance Metrics**: Processing times, record counts, storage usage
-- **Business Analytics**: Station utilization, bike availability trends
-- **Automated Alerts**: Sensor-based notifications for pipeline issues
+### DuckDB Analytics Queries
+```sql
+-- Get total record count
+SELECT COUNT(*) FROM wrm_stations_enhanced_data;
+
+-- View latest station status
+SELECT station_id, name, bikes_available, docks_available 
+FROM wrm_stations_latest 
+LIMIT 10;
+
+-- Analyze record type distribution
+SELECT record_type, COUNT(*) 
+FROM wrm_stations_enhanced_data 
+GROUP BY record_type;
+```
+
+### Python Integration
+```python
+import duckdb
+import os
+
+# Database path relative to project root
+db_path = os.path.join(os.path.dirname(__file__), 'db', 'analytics.duckdb')
+
+with duckdb.connect(db_path) as conn:
+    # Configure S3 credentials
+    conn.execute("INSTALL httpfs; LOAD httpfs;")
+    # ... set credentials ...
+    
+    # Query views
+    result = conn.execute("SELECT * FROM wrm_stations_latest LIMIT 5;").fetchall()
+    print(result)
+```
 
 ## 🚦 Getting Started
 
-### 1. **Setup Database**
-```bash
-# Start PostgreSQL container
-cd postgres-db/
-docker-compose up -d
-```
-
-### 2. **Configure Resources**
-- Set up S3 connections and credentials
-- Configure database connection parameters
+### 1. **Configure Environment**
+- Set up S3-compatible storage credentials
+- Configure API access parameters
 - Set environment variables
 
-### 3. **Deploy Pipeline**
+### 2. **Deploy Pipeline**
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -345,14 +254,14 @@ pip install -r requirements.txt
 dagster-webserver -f wrm_pipeline
 ```
 
-### 4. **Enable Automation**
-- Deploy sensors for automatic monitoring
-- Run initial data backfill using partitions
-- Monitor pipeline through Dagster UI
+### 3. **Initialize Data Processing**
+- Run initial data ingestion from WRM API
+- Process and enhance historical data
+- Create DuckDB analytical views
 
-### 5. **Scale Operations**
-- Sensors automatically handle new data as it arrives
-- Monitor performance and data quality metrics
-- Scale resources based on processing demands
+### 4. **Access Analytics**
+- Use DuckDB CLI or Python for data analysis
+- Query enhanced views for insights
+- Build dashboards using latest station views
 
-This pipeline efficiently handles the complete lifecycle of bike-sharing data from ingestion to analytics, with containerized infrastructure and intelligent automation that ensures data flows seamlessly from source to destination without manual intervention.
+This pipeline provides a complete solution for bike-sharing data processing, from raw API ingestion to advanced analytics, with modern data engineering practices including schema validation, partitioning, and high-performance analytical capabilities.

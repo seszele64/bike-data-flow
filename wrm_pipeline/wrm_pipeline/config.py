@@ -47,3 +47,7 @@ WRM_STATIONS_S3_PREFIX = "bike-data/gen_info/"
 
 # Path to .env file for configuration
 ENV_PATH = dotenv_path
+
+# ================================== duckdb ================================== #
+
+db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'db', 'analytics.duckdb')
