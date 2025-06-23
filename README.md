@@ -5,6 +5,7 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 ## 🎯 Goals
 
 - **Real-time Data Ingestion**: Automatically fetch bike station data from WRM API
+- **Automated Data Processing**: Event-driven processing pipeline triggered by new data arrivals
 - **Data Processing & Transformation**: Clean, process, and enhance raw station data
 - **Data Storage & Analytics**: Store processed data in S3 and provide DuckDB analytics views
 - **Data Quality & Monitoring**: Provide comprehensive summaries and processing statistics
@@ -29,8 +30,15 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 
 ### Pipeline Overview
 ```
-WRM API → Raw Data (S3) → Processing → Enhancement → Analytics (DuckDB)
+WRM API → Raw Data (S3) → [Sensor Detection] → Processing → Enhancement → Analytics (DuckDB)
 ```
+
+### Automated Processing Flow
+1. **Data Ingestion**: Raw data asset fetches data from WRM API and stores in S3
+2. **Event Detection**: Sensor monitors S3 for new raw data files
+3. **Automated Processing**: Sensor triggers processing job when new data arrives
+4. **Data Enhancement**: Processing job runs both processing and enhancement assets
+5. **Analytics Ready**: Enhanced data available for DuckDB analysis
 
 ### Asset Groups
 
@@ -51,6 +59,38 @@ WRM API → Raw Data (S3) → Processing → Enhancement → Analytics (DuckDB)
 - [`bike_density_spatial_analysis`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Spatial density analysis for bike distribution
 - [`bike_density_map`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Interactive density mapping
 
+## 🔄 Automation & Event-Driven Processing
+
+### **Sensor-Based Automation**
+The pipeline features an intelligent sensor system that automatically detects new data and triggers processing:
+
+#### **WRM Stations Raw Data Sensor** ([`wrm_stations_raw_data_sensor`](wrm_pipeline/wrm_pipeline/sensors/stations.py))
+- **Monitoring**: Continuously monitors S3 for new raw data files every 30 seconds
+- **Detection Logic**: Tracks file timestamps using cursor-based state management
+- **Partition Awareness**: Groups files by date partition for efficient processing
+- **Job Triggering**: Automatically launches processing job when new data arrives
+
+#### **Processing Job** ([`wrm_stations_processing_job`](wrm_pipeline/wrm_pipeline/jobs/stations.py))
+- **Asset Selection**: Runs both processing and enhancement assets in sequence
+- **Dependency Management**: Respects asset dependencies for correct execution order
+- **Partition Processing**: Handles date-partitioned data processing automatically
+
+### **Event Flow**
+```
+1. Raw Data Arrives → S3 storage (via raw data asset)
+2. Sensor Detection → Monitors S3 every 30 seconds
+3. New File Found → Sensor creates RunRequest for date partition
+4. Job Execution → Processes raw data → Creates enhanced data
+5. Analytics Ready → Data available in DuckDB views
+```
+
+### **Key Automation Features**
+- **Zero Manual Intervention**: Once enabled, pipeline runs fully automatically
+- **Duplicate Handling**: Sensor only processes genuinely new files
+- **Partition Intelligence**: Automatically handles different date partitions
+- **Error Resilience**: Continues monitoring even if individual runs fail
+- **State Management**: Maintains processing history via cursor mechanism
+
 ## 🔄 Data Processing Flow
 
 ### 1. **Data Ingestion**
@@ -62,7 +102,16 @@ WRM API → S3 Raw Storage (Partitioned by date)
 - Deduplication: Hash-based duplicate detection
 ```
 
-### 2. **Data Processing**
+### 2. **Event Detection & Triggering**
+```python
+S3 File Monitoring → Sensor Detection → Job Triggering
+- Monitoring Interval: 30 seconds
+- State Tracking: Cursor-based timestamp tracking
+- Partition Grouping: Date-based partition processing
+- Run Request Creation: Automatic job execution
+```
+
+### 3. **Data Processing**
 ```python
 Raw Data → Processed Data (Parquet)
 - Column splitting and type conversion
@@ -71,7 +120,7 @@ Raw Data → Processed Data (Parquet)
 - Parquet optimization for analytics
 ```
 
-### 3. **Data Enhancement**
+### 4. **Data Enhancement**
 ```python
 Processed Files → Enhanced Data
 - Metadata enrichment (file timestamps, processing dates)
@@ -80,7 +129,7 @@ Processed Files → Enhanced Data
 - Apache Iceberg table format support
 ```
 
-### 4. **Analytics & Views**
+### 5. **Analytics & Views**
 ```python
 Enhanced Data → DuckDB Views
 - High-performance analytical views
@@ -94,7 +143,7 @@ Enhanced Data → DuckDB Views
 ### S3 Storage Structure
 ```
 s3://bucket/bike-data/gen_info/
-├── raw/dt=YYYY-MM-DD/           # Raw API data files
+├── raw/dt=YYYY-MM-DD/           # Raw API data files (monitored by sensor)
 ├── processed/all/dt=YYYY-MM-DD/ # Processed Parquet files
 └── enhanced/all/dt=YYYY-MM-DD/  # Enhanced datasets with metadata
 ```
@@ -156,6 +205,12 @@ bike-data-flow/
 │   │   │   ├── bike_spatial_density_analysis.py # Spatial analysis
 │   │   │   └── README.md               # DuckDB usage documentation
 │   │   └── __init__.py
+│   ├── sensors/
+│   │   ├── __init__.py
+│   │   └── stations.py                 # Event detection sensors
+│   ├── jobs/
+│   │   ├── __init__.py
+│   │   └── stations.py                 # Processing job definitions
 │   ├── models/
 │   │   └── stations.py                 # Data models and schemas
 │   └── config.py                       # Configuration management
@@ -163,6 +218,12 @@ bike-data-flow/
 ```
 
 ## 🚀 Key Features
+
+### **Event-Driven Architecture**
+- Sensor-based automatic processing triggered by new data arrivals
+- No manual intervention required once pipeline is enabled
+- Intelligent duplicate detection and state management
+- Partition-aware processing for efficient data handling
 
 ### **Intelligent Data Ingestion**
 - Hash-based duplicate detection to avoid redundant API calls
@@ -201,6 +262,7 @@ Key configuration parameters are managed in [`config.py`](wrm_pipeline/wrm_pipel
 - API endpoints and credentials
 - Processing parameters
 - DuckDB connection settings
+- Sensor monitoring intervals
 
 ## 📊 Usage Examples
 
@@ -254,14 +316,33 @@ pip install -r requirements.txt
 dagster-webserver -f wrm_pipeline
 ```
 
-### 3. **Initialize Data Processing**
-- Run initial data ingestion from WRM API
-- Process and enhance historical data
-- Create DuckDB analytical views
+### 3. **Enable Automation**
+- **Enable Sensor**: In Dagster UI, navigate to Automation → Sensors
+- **Turn On Sensor**: Enable `wrm_stations_raw_data_sensor`
+- **Monitor Activity**: Sensor will check for new data every 30 seconds
 
-### 4. **Access Analytics**
+### 4. **Initialize Data Processing**
+- Run initial data ingestion from WRM API (manually or via schedule)
+- Sensor will automatically detect and process new raw data
+- Enhanced data will be available for analytics
+
+### 5. **Access Analytics**
 - Use DuckDB CLI or Python for data analysis
 - Query enhanced views for insights
 - Build dashboards using latest station views
 
-This pipeline provides a complete solution for bike-sharing data processing, from raw API ingestion to advanced analytics, with modern data engineering practices including schema validation, partitioning, and high-performance analytical capabilities.
+## 🔍 Monitoring & Operations
+
+### **Sensor Monitoring**
+- **Status**: Check sensor status in Dagster UI (Automation tab)
+- **Logs**: View sensor evaluation logs for debugging
+- **Cursor State**: Monitor processing state via cursor tracking
+- **Run History**: Track automatically triggered job runs
+
+### **Troubleshooting**
+- **Sensor Not Triggering**: Check S3 credentials and bucket access
+- **Processing Failures**: Review job logs for specific error details
+- **Duplicate Processing**: Sensor's cursor mechanism prevents duplicates
+- **Performance**: Adjust monitoring interval if needed (currently 30 seconds)
+
+This pipeline provides a complete solution for automated bike-sharing data processing, from raw API ingestion to advanced analytics, with modern data engineering practices including event-driven automation, schema validation, partitioning, and high-performance analytical capabilities.
