@@ -8,3 +8,6 @@ __pycache__/
 
 # dagster home
 dagster_home
+
+# ignore vscode config
+.vscode
