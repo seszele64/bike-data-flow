@@ -17,7 +17,6 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 - **Dagster**: Data orchestration and pipeline management
 - **S3-Compatible Storage**: Object storage for raw, processed, and enhanced data files
 - **DuckDB**: High-performance analytical processing and querying
-- **Apache Iceberg**: Modern table format for enhanced data management
 - **Pandas**: Data manipulation and transformation
 
 ### Supporting Libraries
@@ -50,8 +49,6 @@ WRM API → Raw Data (S3) → [Sensor Detection] → Processing → Enhancement 
 
 #### 3. **Enhanced Data** (`enhanced_data`)
 - [`wrm_stations_enhanced_data_all`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_all.py): Creates enhanced datasets with metadata enrichment
-- [`daily_station_data`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_station_data.py): Daily partitioned station-only data with Iceberg support
-- [`daily_bike_data`](wrm_pipeline/wrm_pipeline/assets/stations/enhanced_bike_data.py): Daily partitioned bike-only data
 
 #### 4. **Analytics Views** (`analytics_views`)
 - [`duckdb_enhanced_views`](wrm_pipeline/wrm_pipeline/assets/duckdb/create_enhanced_views.py): Creates DuckDB views for enhanced data analysis
@@ -126,7 +123,6 @@ Processed Files → Enhanced Data
 - Metadata enrichment (file timestamps, processing dates)
 - Record type classification (station vs bike data)
 - Daily partitioning for efficient access
-- Apache Iceberg table format support
 ```
 
 ### 5. **Analytics & Views**
@@ -195,9 +191,7 @@ bike-data-flow/
 │   │   │   ├── commons.py              # Shared utilities and partitions
 │   │   │   ├── raw_all.py              # Raw data ingestion from API
 │   │   │   ├── processed_all.py        # Data processing and validation
-│   │   │   ├── enhanced_all.py         # Data enhancement and metadata
-│   │   │   ├── enhanced_station_data.py # Station-only enhanced data
-│   │   │   └── enhanced_bike_data.py   # Bike-only enhanced data
+│   │   │   └── enhanced_all.py         # Data enhancement and metadata
 │   │   ├── duckdb/
 │   │   │   ├── __init__.py
 │   │   │   ├── create_enhanced_views.py # DuckDB view creation
@@ -238,7 +232,6 @@ bike-data-flow/
 - Parquet optimization for analytical performance
 
 ### **Enhanced Data Management**
-- Apache Iceberg support for advanced table management
 - Metadata enrichment with processing timestamps
 - Record type classification and filtering
 - Daily partitioning for efficient data access

@@ -6,12 +6,11 @@ from .assets import assets
 from .resources import (
     s3_resource,
     postgres_resource,
-    iceberg_io_manager,
     duckdb_io_manager,
     duckdb_s3_io_manager,
     duckdb_hybrid_io_manager,
     s3_io_manager,
-    hive_partitioned_s3_io_manager  # Add this import
+    hive_partitioned_s3_io_manager
 )
 from .sensors.stations import wrm_stations_raw_data_sensor
 from .jobs.stations import wrm_stations_processing_job
@@ -34,12 +33,11 @@ defs = Definitions(
         "s3_resource": s3_resource,
         "s3": s3_resource,  # Add this - s3_io_manager expects key "s3"
         "postgres_resource": postgres_resource,
-        "iceberg_io_manager": iceberg_io_manager,
         "duckdb_io_manager": duckdb_io_manager,
         "duckdb_s3_io_manager": duckdb_s3_io_manager,
         "duckdb_hybrid_io_manager": duckdb_hybrid_io_manager,
         "s3_io_manager": s3_io_manager,
-        "hive_partitioned_s3_io_manager": hive_partitioned_s3_io_manager,  # Add this
+        "hive_partitioned_s3_io_manager": hive_partitioned_s3_io_manager,
     },
     schedules=[]
 )
