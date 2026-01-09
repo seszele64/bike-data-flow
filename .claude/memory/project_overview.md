@@ -19,9 +19,16 @@ The bike-data-flow dashboard is a web-based analytics platform for visualizing b
 - **DuckDB** - Analytical database for time-series data
 - **Upstash Redis** - Caching and rate limiting
 
+### Data Pipeline
+- **Dagster** - Data orchestration framework
+- **Pandas** - Data processing and transformation
+- **Pandera** - Data validation and schema enforcement
+- **boto3** - S3 client for Hetzner object storage
+
 ### Infrastructure
 - **Vercel** - Serverless hosting platform
-- **S3/MinIO** - Object storage for data files
+- **Hetzner S3** - Object storage for data files
+- **Hetzner VPS** - Compute for Dagster pipeline
 - **GitHub** - Version control and CI/CD
 
 ## Key Features
@@ -38,21 +45,34 @@ The bike-data-flow dashboard is a web-based analytics platform for visualizing b
 │   Browser   │────▶│   Vercel    │────▶│   DuckDB    │
 │  (Next.js)  │     │  (Edge/API) │     │  (Analytics)│
 └─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │  Upstash    │
-                    │   Redis     │
-                    │  (Cache)    │
-                    └─────────────┘
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │  Upstash    │
+                     │   Redis     │
+                     │  (Cache)    │
+                     └─────────────┘
+
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  WRM API    │────▶│  Dagster    │────▶│  Hetzner S3 │
+│  (External)  │     │  (Pipeline)  │     │  (Storage)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │  Hetzner    │
+                     │  VPS        │
+                     │  (Compute)   │
+                     └─────────────┘
 ```
 
 ## Data Flow
 
-1. **Data Ingestion**: WRM pipeline fetches station data and stores in S3/MinIO
-2. **Data Processing**: DuckDB processes and aggregates data for analytics
-3. **API Layer**: Next.js Route Handlers serve data with caching
-4. **Visualization**: Plotly.js renders interactive charts and maps
+1. **Data Ingestion**: Dagster pipeline fetches station data from WRM API and stores in Hetzner S3
+2. **Data Processing**: Dagster assets process, validate, and transform data into Parquet format
+3. **Analytics**: DuckDB queries processed data for dashboard analytics
+4. **API Layer**: Next.js Route Handlers serve data with Redis caching
+5. **Visualization**: Plotly.js renders interactive charts and maps
 
 ## Project Structure
 
@@ -69,6 +89,16 @@ bike-data-flow/
 ├── components/            # React components
 │   ├── charts/           # Plotly chart components
 │   └── ui/               # UI components
+├── wrm_pipeline/          # Dagster data pipeline
+│   ├── wrm_pipeline/     # Pipeline code
+│   │   ├── assets/       # Dagster assets
+│   │   ├── jobs/         # Dagster jobs
+│   │   ├── sensors/       # Dagster sensors
+│   │   ├── resources/     # Dagster resources
+│   │   └── models/       # Data schemas
+│   └── wrm_pipeline_tests/ # Pipeline tests
+├── storage/                # Storage utilities
+│   └── wrm_data/        # WRM data handling
 ├── public/               # Static assets
 └── .claude/              # Claude Code memory
     └── memory/           # Project memory files
@@ -96,9 +126,15 @@ bike-data-flow/
 ### Decisions
 - [`performance_targets.md`](decisions/performance_targets.md) - Performance targets and monitoring strategy
 
+### Dagster Pipeline
+- [`pipeline-analysis.md`](pipeline-analysis.md) - Dagster pipeline architecture and components
+- [`improvement-roadmap.md`](improvement-roadmap.md) - Prioritized improvements for the pipeline
+- [`data-engineering-best-practices.md`](data-engineering-best-practices.md) - 2024-2025 data engineering best practices
+- [`infrastructure-constraints.md`](infrastructure-constraints.md) - Hetzner S3/VPS constraints and tool recommendations
+
 ## Environment Variables
 
-### Required
+### Required (Dashboard)
 - `DUCKDB_PATH` - Path to DuckDB database file
 - `S3_ACCESS_KEY_ID` - S3 access key
 - `S3_SECRET_ACCESS_KEY` - S3 secret key
@@ -107,9 +143,18 @@ bike-data-flow/
 - `UPSTASH_REDIS_REST_URL` - Upstash Redis URL
 - `UPSTASH_REDIS_REST_TOKEN` - Upstash Redis token
 
+### Required (Dagster Pipeline)
+- `HETZNER_ENDPOINT_URL` - Hetzner S3 endpoint URL
+- `HETZNER_ACCESS_KEY_ID` - Hetzner S3 access key
+- `HETZNER_SECRET_ACCESS_KEY` - Hetzner S3 secret key
+- `BUCKET_NAME` - S3 bucket name
+- `WRM_STATIONS_S3_PREFIX` - S3 prefix for WRM data
+
 ### Optional
 - `NEXT_PUBLIC_MAPBOX_TOKEN` - Mapbox access token (if using Mapbox)
 - `LOG_LEVEL` - Logging level (default: info)
+- `VAULT_URL` - HashiCorp Vault URL (if using Vault)
+- `VAULT_TOKEN` - HashiCorp Vault token (if using Vault)
 
 ## Performance Targets
 
@@ -128,3 +173,6 @@ bike-data-flow/
 - [Plotly.js Documentation](https://plotly.com/javascript/)
 - [Vercel Documentation](https://vercel.com/docs)
 - [Upstash Documentation](https://upstash.com/docs)
+- [Dagster Documentation](https://docs.dagster.io)
+- [Hetzner Documentation](https://docs.hetzner.com)
+- [Hetzner S3 Documentation](https://docs.hetzner.com/storage/object-storage)
