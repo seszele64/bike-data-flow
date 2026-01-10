@@ -9,3 +9,6 @@ dagster_home
 
 # ignore vscode config
 .vscode
+
+# ignore Claude Code internals
+.roo/
