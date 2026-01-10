@@ -26,6 +26,7 @@ class RotationType(str, Enum):
     """Types of secret rotation."""
 
     MANUAL = "manual"
+    AUTOMATIC = "automatic"
     SCHEDULED = "scheduled"
     DYNAMIC = "dynamic"
 
@@ -464,6 +465,74 @@ class VaultConnectionConfig(BaseModel):
         }
 
 
+class RotationStatus(str, Enum):
+    """Status of a rotation operation."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    ROLLED_BACK = "rolled_back"
+
+
+class RotationHistory(BaseModel):
+    """Record of a secret rotation operation."""
+
+    id: str = Field(
+        ...,
+        description="Unique rotation history ID",
+        examples=["rot-abc123"],
+    )
+    secret_path: str = Field(
+        ...,
+        description="Path to the secret that was rotated",
+        examples=["secret/data/bike-data-flow/production/database"],
+    )
+    rotation_type: RotationType = Field(..., description="Type of rotation performed")
+    status: RotationStatus = Field(..., description="Rotation status")
+    timestamp: datetime = Field(..., description="When the rotation occurred")
+    performed_by: Optional[str] = Field(
+        default=None,
+        description="User or system that performed the rotation",
+        examples=["system-scheduler", "admin@bike-data-flow"],
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Error message if rotation failed",
+    )
+    duration_seconds: Optional[float] = Field(
+        default=None,
+        description="Duration of rotation in seconds",
+    )
+    previous_version: Optional[int] = Field(
+        default=None,
+        description="Previous secret version",
+    )
+    new_version: Optional[int] = Field(
+        default=None,
+        description="New secret version",
+    )
+    metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Additional rotation metadata",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "rot-abc123",
+                "secret_path": "secret/data/bike-data-flow/production/database",
+                "rotation_type": "automatic",
+                "status": "success",
+                "timestamp": "2026-01-10T12:00:00Z",
+                "performed_by": "system-scheduler",
+                "duration_seconds": 2.5,
+                "previous_version": 5,
+                "new_version": 6,
+            }
+        }
+
+
 class SecretRotationPolicy(BaseModel):
     """Configuration for secret rotation behavior."""
 
@@ -474,16 +543,17 @@ class SecretRotationPolicy(BaseModel):
     )
     rotation_type: RotationType = Field(
         ...,
-        description="Type of rotation",
+        description="Type of rotation (manual, automatic, scheduled)",
     )
     rotation_period_days: Optional[int] = Field(
         default=None,
         description="Days between rotations",
         ge=1,
     )
-    rotation_function: Optional[str] = Field(
+    rotation_script_path: Optional[str] = Field(
         default=None,
-        description="Custom rotation function name",
+        description="Path to custom rotation script",
+        examples=["/opt/vault/scripts/rotate-db-credentials.sh"],
     )
     last_rotated: Optional[datetime] = Field(
         default=None,
@@ -493,6 +563,34 @@ class SecretRotationPolicy(BaseModel):
         default=None,
         description="Next scheduled rotation",
     )
+    is_active: bool = Field(
+        default=True,
+        description="Whether rotation is active for this secret",
+    )
+    cron_schedule: Optional[str] = Field(
+        default=None,
+        description="Cron expression for scheduled rotation",
+        examples=["0 2 * * 0"],  # Weekly on Sunday at 2am
+    )
+    notify_on_failure: bool = Field(
+        default=True,
+        description="Send notifications on rotation failure",
+    )
+    notify_emails: list[str] = Field(
+        default_factory=list,
+        description="Email addresses to notify",
+        examples=["admin@bike-data-flow"],
+    )
+    max_retries: int = Field(
+        default=3,
+        description="Maximum rotation retry attempts",
+        ge=0,
+        le=10,
+    )
+    rollback_on_failure: bool = Field(
+        default=True,
+        description="Rollback to previous version on failure",
+    )
 
     class Config:
         json_schema_extra = {
@@ -500,10 +598,28 @@ class SecretRotationPolicy(BaseModel):
                 "secret_path": "secret/data/bike-data-flow/production/api-key",
                 "rotation_type": "scheduled",
                 "rotation_period_days": 90,
+                "rotation_script_path": "/opt/vault/scripts/rotate-api-key.sh",
                 "last_rotated": "2025-10-12T10:00:00Z",
                 "next_rotation": "2026-01-10T10:00:00Z",
+                "is_active": True,
+                "cron_schedule": "0 2 * * 0",
+                "notify_on_failure": True,
+                "notify_emails": ["admin@bike-data-flow"],
+                "max_retries": 3,
+                "rollback_on_failure": True,
             }
         }
+
+    @field_validator("notify_emails")
+    @classmethod
+    def validate_emails(cls, v: list[str]) -> list[str]:
+        """Validate email addresses."""
+        import re
+        email_pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+        for email in v:
+            if not re.match(email_pattern, email):
+                raise ValueError(f"Invalid email address: {email}")
+        return v
 
 
 class AuditLog(BaseModel):

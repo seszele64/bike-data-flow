@@ -28,8 +28,12 @@ from wrm_pipeline.wrm_pipeline.vault.exceptions import (
 from wrm_pipeline.wrm_pipeline.vault.models import (
     AuditLog,
     AuditOperation,
+    RotationHistory,
+    RotationStatus,
+    RotationType,
     Secret,
     SecretMetadata,
+    SecretRotationPolicy,
     VaultConnectionConfig,
     VaultHealth,
     VaultHealthStatus,
@@ -569,6 +573,282 @@ class VaultClient:
             self.close()
         except Exception:
             pass
+
+    # =========================================================================
+    # Secret Rotation Methods
+    # =========================================================================
+
+    def configure_rotation_policy(
+        self, policy: SecretRotationPolicy
+    ) -> SecretRotationPolicy:
+        """Configure rotation policy for a secret.
+
+        Args:
+            policy: Rotation policy to configure
+
+        Returns:
+            The configured policy
+
+        Raises:
+            VaultError: If configuration fails
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import RotationScheduler, RotationHistoryTracker
+
+        self._ensure_authenticated()
+
+        # Initialize rotation components if not present
+        if not hasattr(self, "_rotation_scheduler"):
+            self._rotation_scheduler = RotationScheduler(
+                history_tracker=RotationHistoryTracker()
+            )
+
+        # Validate policy
+        if policy.rotation_type == RotationType.SCHEDULED:
+            if not policy.rotation_period_days and not policy.cron_schedule:
+                raise VaultError(
+                    "Scheduled rotation requires rotation_period_days or cron_schedule"
+                )
+
+        # Store policy in Vault for persistence
+        policy_path = f"_rotation_policies/{policy.secret_path}"
+        try:
+            self._client.secrets.kv.v2.create_or_update_secret(
+                path=policy_path,
+                secret=policy.model_dump(),
+                mount_point="secret",
+            )
+        except Exception as e:
+            logger.warning(f"Could not store rotation policy in Vault: {e}")
+
+        # Schedule the rotation
+        self._rotation_scheduler.schedule_rotation(policy)
+
+        logger.info(f"Configured rotation policy for {policy.secret_path}")
+        return policy
+
+    def rotate_secret(
+        self,
+        secret_path: str,
+        rotation_type: RotationType = RotationType.MANUAL,
+        secret_type: str = "generic",
+    ) -> RotationHistory:
+        """Rotate a secret immediately.
+
+        Args:
+            secret_path: Path to the secret to rotate
+            rotation_type: Type of rotation to perform
+            secret_type: Type of secret (database, api_key, certificate, generic)
+
+        Returns:
+            RotationHistory record
+
+        Raises:
+            VaultSecretNotFoundError: If secret doesn't exist
+            VaultError: If rotation fails
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import (
+            RotationOrchestrator,
+            RotationScheduler,
+            RotationHistoryTracker,
+        )
+
+        self._ensure_authenticated()
+
+        # Check secret exists
+        try:
+            current = self.get_secret(secret_path)
+        except VaultSecretNotFoundError:
+            raise VaultSecretNotFoundError(
+                path=secret_path,
+                message=f"Secret not found for rotation: {secret_path}",
+            )
+
+        # Initialize orchestrator
+        scheduler = RotationScheduler()
+        orchestrator = RotationOrchestrator(
+            scheduler=scheduler, vault_client=self
+        )
+
+        # Perform rotation
+        history = orchestrator.rotate_secret(
+            secret_path=secret_path,
+            secret_type=secret_type,
+        )
+
+        # Update policy if exists
+        if hasattr(self, "_rotation_scheduler"):
+            policy_path = f"_rotation_policies/{secret_path}"
+            try:
+                stored_policy = self._client.secrets.kv.v2.read_secret_version(
+                    path=policy_path,
+                    mount_point="secret",
+                )
+                policy_data = stored_policy.get("data", {}).get("data", {})
+                if "last_rotated" in policy_data:
+                    from datetime import datetime
+                    policy_data["last_rotated"] = datetime.utcnow().isoformat()
+                    self._client.secrets.kv.v2.create_or_update_secret(
+                        path=policy_path,
+                        secret=policy_data,
+                        mount_point="secret",
+                    )
+            except Exception:
+                pass  # Policy may not exist
+
+        # Invalidate cache
+        self._clear_cache(secret_path)
+
+        logger.info(f"Rotated secret: {secret_path}")
+        return history
+
+    def get_rotation_status(self, secret_path: str) -> dict[str, Any]:
+        """Get rotation status for a secret.
+
+        Args:
+            secret_path: Path to the secret
+
+        Returns:
+            Dictionary with rotation status information
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import RotationScheduler, RotationHistoryTracker
+
+        self._ensure_authenticated()
+
+        # Check if we have a scheduler with this secret
+        if hasattr(self, "_rotation_scheduler"):
+            status = self._rotation_scheduler.get_rotation_status(secret_path)
+            if status.get("scheduled"):
+                return status
+
+        # Get rotation status from stored policy
+        policy_path = f"_rotation_policies/{secret_path}"
+        try:
+            stored_policy = self._client.secrets.kv.v2.read_secret_version(
+                path=policy_path,
+                mount_point="secret",
+            )
+            policy_data = stored_policy.get("data", {}).get("data", {})
+            return {
+                "scheduled": True,
+                "is_active": policy_data.get("is_active", True),
+                "rotation_type": policy_data.get("rotation_type"),
+                "last_rotated": policy_data.get("last_rotated"),
+                "next_rotation": policy_data.get("next_rotation"),
+                "rotation_period_days": policy_data.get("rotation_period_days"),
+                "cron_schedule": policy_data.get("cron_schedule"),
+            }
+        except Exception:
+            pass
+
+        return {"scheduled": False, "message": "No rotation policy configured"}
+
+    def list_secrets_for_rotation(self) -> list[str]:
+        """List all secrets with rotation policies.
+
+        Returns:
+            List of secret paths with rotation configured
+        """
+        self._ensure_authenticated()
+
+        secrets: list[str] = []
+
+        # Check scheduler
+        if hasattr(self, "_rotation_scheduler"):
+            for policy in self._rotation_scheduler.get_scheduled_secrets():
+                secrets.append(policy.secret_path)
+
+        # Check Vault for stored policies
+        try:
+            policies = self._client.secrets.kv.v2.list_secrets(
+                path="_rotation_policies",
+                mount_point="secret",
+            )
+            keys = policies.get("data", {}).get("keys", [])
+            for key in keys:
+                if key.endswith("/"):
+                    continue
+                secret_path = key
+                if secret_path not in secrets:
+                    secrets.append(secret_path)
+        except Exception:
+            pass  # No policies stored
+
+        return secrets
+
+    def get_rotation_history(
+        self,
+        secret_path: Optional[str] = None,
+        limit: int = 50,
+        status_filter: Optional[RotationStatus] = None,
+    ) -> list[RotationHistory]:
+        """Get rotation history for secrets.
+
+        Args:
+            secret_path: Filter by secret path (None for all)
+            limit: Maximum number of entries
+            status_filter: Filter by status
+
+        Returns:
+            List of rotation history entries
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import RotationScheduler, RotationHistoryTracker
+
+        self._ensure_authenticated()
+
+        # Get history from scheduler if available
+        if hasattr(self, "_rotation_scheduler"):
+            tracker = self._rotation_scheduler.get_history_tracker()
+            return tracker.get_history(
+                secret_path=secret_path,
+                limit=limit,
+                status_filter=status_filter,
+            )
+
+        return []
+
+    def get_rotation_stats(self, secret_path: Optional[str] = None) -> dict[str, Any]:
+        """Get rotation statistics.
+
+        Args:
+            secret_path: Filter by secret path (None for all secrets)
+
+        Returns:
+            Dictionary with rotation statistics
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import RotationScheduler, RotationHistoryTracker
+
+        self._ensure_authenticated()
+
+        if hasattr(self, "_rotation_scheduler"):
+            tracker = self._rotation_scheduler.get_history_tracker()
+            return tracker.get_rotation_stats(secret_path)
+
+        return {
+            "total_rotations": 0,
+            "success_rate": 0.0,
+            "avg_duration_seconds": 0.0,
+            "failed_count": 0,
+            "success_count": 0,
+        }
+
+    def check_due_rotations(self, force: bool = False) -> list[RotationHistory]:
+        """Check and perform any due rotations.
+
+        Args:
+            force: Force rotation regardless of schedule
+
+        Returns:
+            List of rotation history records
+        """
+        from wrm_pipeline.wrm_pipeline.vault.rotation import RotationScheduler, RotationHistoryTracker
+
+        self._ensure_authenticated()
+
+        if not hasattr(self, "_rotation_scheduler"):
+            logger.info("No rotation scheduler configured")
+            return []
+
+        return self._rotation_scheduler.check_and_rotate(force=force)
 
 
 @lru_cache(maxsize=32)
