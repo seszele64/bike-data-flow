@@ -1,0 +1,323 @@
+openapi: 3.1.0
+info:
+  title: Bike Data Flow Vault Service
+  description: Internal API for Vault secrets management integration
+  version: 1.0.0
+
+servers:
+  - url: https://vault.internal.bike-data-flow.com/v1
+    description: Production Vault server
+  - url: http://localhost:8200/v1
+    description: Local development
+
+tags:
+  - name: Secrets
+    description: Secret CRUD operations
+  - name: Policies
+    description: Access policy management
+  - name: Auth
+    description: Authentication methods
+  - name: Health
+    description: Vault health checks
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Check Vault health status
+      operationId: getHealth
+      responses:
+        '200':
+          description: Vault is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultHealth'
+        '503':
+          description: Vault is unavailable or sealed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultHealth'
+
+  /secret/data/{path}:
+    get:
+      tags:
+        - Secrets
+      summary: Read a secret from Vault
+      operationId: readSecret
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+            example: bike-data-flow/production/database
+          description: Path to the secret (without 'secret/data/' prefix)
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 1
+          description: Specific secret version to read
+      responses:
+        '200':
+          description: Secret retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretResponse'
+        '404':
+          description: Secret not found
+        '403':
+          description: Access denied
+
+    post:
+      tags:
+        - Secrets
+      summary: Create or update a secret
+      operationId: writeSecret
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Path to the secret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretWriteRequest'
+      responses:
+        '200':
+          description: Secret created/updated successfully
+        '403':
+          description: Access denied
+
+    delete:
+      tags:
+        - Secrets
+      summary: Delete a secret
+      operationId: deleteSecret
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Path to the secret
+        - name: versions
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: integer
+          description: Specific versions to delete (KV v2)
+      responses:
+        '204':
+          description: Secret deleted successfully
+        '403':
+          description: Access denied
+
+  /secret/metadata/{path}:
+    get:
+      tags:
+        - Secrets
+      summary: Get secret metadata
+      operationId: getSecretMetadata
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Path to the secret
+      responses:
+        '200':
+          description: Metadata retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretMetadata'
+        '404':
+          description: Secret not found
+
+  /sys/policies/acl/{name}:
+    get:
+      tags:
+        - Policies
+      summary: Get an ACL policy
+      operationId: getPolicy
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Policy name
+      responses:
+        '200':
+          description: Policy retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+        '404':
+          description: Policy not found
+
+    post:
+      tags:
+        - Policies
+      summary: Create or update a policy
+      operationId: upsertPolicy
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Policy name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyWriteRequest'
+      responses:
+        '200':
+          description: Policy created/updated
+
+  /auth/approle/role/{role_name}/secret-id:
+    post:
+      tags:
+        - Auth
+      summary: Generate a secret-id for AppRole authentication
+      operationId: generateSecretId
+      parameters:
+        - name: role_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: AppRole role name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretIdRequest'
+      responses:
+        '200':
+          description: Secret-id generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretIdResponse'
+        '403':
+          description: Access denied
+
+components:
+  schemas:
+    VaultHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - initialized
+            - sealed
+            - unsealed
+            - standby
+            - maintenance
+            - disabled
+        version:
+          type: string
+          example: "1.15.0"
+        cluster_id:
+          type: string
+        server_time_utc:
+          type: string
+          format: date-time
+
+    SecretResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            data:
+              type: object
+              description: Secret key-value pairs
+            metadata:
+              $ref: '#/components/schemas/SecretMetadata'
+
+    SecretWriteRequest:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          description: Secret key-value pairs
+        options:
+          type: object
+          properties:
+            cas:
+              type: integer
+              description: Check-and-set parameter
+
+    SecretMetadata:
+      type: object
+      properties:
+        created_time:
+          type: string
+          format: date-time
+        deletion_time:
+          type: string
+          format: date-time
+        destroyed:
+          type: boolean
+        version:
+          type: integer
+
+    PolicyResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        rules:
+          type: string
+          description: HCL policy rules
+
+    PolicyWriteRequest:
+      type: object
+      required:
+        - rules
+      properties:
+        rules:
+          type: string
+          description: HCL encoded policy rules
+
+    SecretIdRequest:
+      type: object
+      properties:
+        metadata:
+          type: object
+          description: Optional metadata for the secret-id
+
+    SecretIdResponse:
+      type: object
+      properties:
+        secret_id:
+          type: string
+        secret_id_accessor:
+          type: string
+        secret_id_num_uses:
+          type: integer
+        secret_id_ttl:
+          type: integer
