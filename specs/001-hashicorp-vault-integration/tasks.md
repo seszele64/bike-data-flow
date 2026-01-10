@@ -49,12 +49,12 @@
 
 ### Implementation for User Story 1
 
-- [ ] T009 Create server configuration documentation for /etc/vault.d/vault.hcl in docs/vault-server-config.md
-- [ ] T010 [US1] Create systemd service file for Vault in config/vault/vault.service
-- [ ] T011 [US1] Create TLS certificate configuration documentation in docs/vault-tls-config.md
-- [ ] T012 [US1] Create Vault initialization script in scripts/vault/init-vault.sh
-- [ ] T013 [US1] Create unseal key management documentation in docs/vault-unseal-management.md
-- [ ] T014 [US1] Create health check verification script in scripts/vault/health-check.sh
+- [x] T009 Create server configuration documentation for /etc/vault.d/vault.hcl in docs/vault-server-config.md
+- [x] T010 [US1] Create systemd service file for Vault in config/vault/vault.service
+- [x] T011 [US1] Create TLS certificate configuration documentation in docs/vault-tls-config.md
+- [x] T012 [US1] Create Vault initialization script in scripts/vault/init-vault.sh
+- [x] T013 [US1] Create unseal key management documentation in docs/vault-unseal-management.md
+- [x] T014 [US1] Create health check verification script in scripts/vault/health-check.sh
 
 **Checkpoint**: User Story 1 complete - Vault server can be deployed and verified
 

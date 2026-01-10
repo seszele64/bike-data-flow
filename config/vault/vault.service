@@ -1,0 +1,56 @@
+[Unit]
+Description=HashiCorp Vault Server
+Documentation=https://www.vaultproject.io/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+# Service type
+Type=notify
+NotifyAccess=all
+
+# User and group to run Vault
+User=root
+Group=root
+
+# Vault binary and configuration
+ExecStart=/usr/local/bin/vault server -config=/etc/vault.d/vault.hcl
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Graceful shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Environment variables
+Environment="VAULT_ADDR=https://127.0.0.1:8200"
+Environment="VAULT_API_ADDR=https://127.0.0.1:8200"
+Environment="VAULT_CLUSTER_ADDR=https://127.0.0.1:8201"
+Environment="VAULT_LOG_FORMAT=standard"
+Environment="VAULT_LOG_LEVEL=info"
+
+# Open file limits (important for production)
+LimitNOFILE=65536
+LimitNOFILESoft=65536
+
+# Working directory
+WorkingDirectory=/var/lib/vault
+
+# Runtime directory
+RuntimeDirectory=vault
+RuntimeDirectoryMode=0700
+
+# State directory
+StateDirectory=vault
+StateDirectoryMode=0700
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vault
+
+[Install]
+WantedBy=multi-user.target
