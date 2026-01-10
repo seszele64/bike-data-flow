@@ -68,15 +68,15 @@
 
 ### Implementation for User Story 2
 
-- [ ] T015 [US2] Create VaultSecretsResource class in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T016 [US2] Implement get_secret method with caching in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T017 [US2] Implement get_database_credentials convenience method in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T018 [US2] Implement get_api_key method in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T019 [US2] Implement list_secrets method in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T020 [US2] Implement health_check method in wrm_pipeline/wrm_pipeline/vault/resource.py
-- [ ] T021 [US2] Update wrm_pipeline/wrm_pipeline/vault/__init__.py to export VaultSecretsResource
-- [ ] T022 [US2] Update wrm_pipeline/wrm_pipeline/definitions.py to include vault resource
-- [ ] T023 [US2] Create example asset using Vault resource in wrm_pipeline/wrm_pipeline/assets/vault_example.py
+- [x] T015 [US2] Create VaultSecretsResource class in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T016 [US2] Implement get_secret method with caching in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T017 [US2] Implement get_database_credentials convenience method in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T018 [US2] Implement get_api_key method in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T019 [US2] Implement list_secrets method in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T020 [US2] Implement health_check method in wrm_pipeline/wrm_pipeline/vault/resource.py
+- [x] T021 [US2] Update wrm_pipeline/wrm_pipeline/vault/__init__.py to export VaultSecretsResource
+- [x] T022 [US2] Update wrm_pipeline/wrm_pipeline/definitions.py to include vault resource
+- [x] T023 [US2] Create example asset using Vault resource in wrm_pipeline/wrm_pipeline/assets/vault_example.py
 
 **Checkpoint**: User Story 2 complete - Dagster pipelines can retrieve secrets from Vault
 
