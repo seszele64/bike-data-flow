@@ -6,9 +6,11 @@ from minio.error import S3Error
 from contextlib import contextmanager
 import psycopg2
 from dagster_aws.s3.resources import S3Resource
+from typing import Optional
 
 
 from .config import (
+    get_database_config, get_storage_config,
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD,
     S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
     S3_REGION_NAME, BUCKET_NAME, WRM_STATIONS_S3_PREFIX,
@@ -59,21 +61,59 @@ class MinIOResource(ConfigurableResource):
             raise
 
 class PostgreSQLResource(ConfigurableResource):
-    host: str
-    port: int
-    database: str
-    user: str
-    password: str
+    """PostgreSQL resource that can use Vault for credentials."""
+    host: str = Field(default=EnvVar("POSTGRES_HOST"))
+    port: int = Field(default=EnvVar("POSTGRES_PORT"))
+    database: str = Field(default=EnvVar("POSTGRES_DB"))
+    user: str = Field(default=EnvVar("POSTGRES_USER"))
+    password: str = Field(default=EnvVar("POSTGRES_PASSWORD"))
+    use_vault: bool = Field(default=False, description="Use Vault for credentials")
+    vault_path: str = Field(default="bike-data-flow/production/database")
     
     @contextmanager
     def get_connection(self):
-        conn = psycopg2.connect(
-            host=self.host,
-            port=self.port,
-            database=self.database,
-            user=self.user,
-            password=self.password
-        )
+        """Get a database connection."""
+        # If Vault is enabled, fetch credentials from Vault
+        if self.use_vault:
+            try:
+                from .vault.client import VaultClient
+                from .vault.models import VaultConnectionConfig
+                
+                config = VaultConnectionConfig(
+                    vault_addr=os.environ.get("VAULT_ADDR", "https://vault.internal.bike-data-flow.com:8200"),
+                    auth_method="approle",
+                    role_id=os.environ.get("VAULT_ROLE_ID"),
+                    secret_id=os.environ.get("VAULT_SECRET_ID"),
+                )
+                
+                client = VaultClient(config)
+                secret = client.get_secret(self.vault_path)
+                client.close()
+                
+                conn = psycopg2.connect(
+                    host=secret.data.get("host", self.host),
+                    port=secret.data.get("port", self.port),
+                    database=secret.data.get("database", self.database),
+                    user=secret.data.get("username", self.user),
+                    password=secret.data.get("password", self.password)
+                )
+            except Exception as e:
+                # Fall back to configured values
+                conn = psycopg2.connect(
+                    host=self.host,
+                    port=self.port,
+                    database=self.database,
+                    user=self.user,
+                    password=self.password
+                )
+        else:
+            conn = psycopg2.connect(
+                host=self.host,
+                port=self.port,
+                database=self.database,
+                user=self.user,
+                password=self.password
+            )
         try:
             yield conn
         finally:
@@ -85,7 +125,8 @@ postgres_resource = PostgreSQLResource(
     port=POSTGRES_PORT,
     database=POSTGRES_DB,
     user=POSTGRES_USER,
-    password=POSTGRES_PASSWORD
+    password=POSTGRES_PASSWORD,
+    use_vault=False,  # Set to True and configure vault_path to use Vault
 )
 
 # Determine if a region name is configured and should be passed

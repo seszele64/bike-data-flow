@@ -9,16 +9,57 @@ from typing import List
 import pandera as pa
 from pandera import Column, DataFrameSchema, Check
 import hashlib
+import os
 
 from ...config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 from ...models.stations import processed_data_schema
+
+
+class WRMAPIConfig:
+    """Configuration for WRM API - supports Vault integration."""
+    
+    def __init__(self):
+        self._api_url = None
+    
+    @property
+    def api_url(self) -> str:
+        """Get WRM API URL from Vault or environment."""
+        if self._api_url is None:
+            # Try to get from Vault if enabled
+            vault_addr = os.environ.get("VAULT_ADDR")
+            if vault_addr and os.environ.get("VAULT_ENABLED", "false").lower() == "true":
+                try:
+                    from ...vault.client import VaultClient
+                    from ...vault.models import VaultConnectionConfig
+                    
+                    config = VaultConnectionConfig(
+                        vault_addr=vault_addr,
+                        auth_method="approle",
+                        role_id=os.environ.get("VAULT_ROLE_ID"),
+                        secret_id=os.environ.get("VAULT_SECRET_ID"),
+                    )
+                    client = VaultClient(config)
+                    secret = client.get_secret("bike-data-flow/production/api")
+                    client.close()
+                    self._api_url = secret.data.get("wrm_api_url", "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw")
+                except Exception:
+                    self._api_url = "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw"
+            else:
+                self._api_url = "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw"
+        return self._api_url
+
+
+# Global config instance
+wrm_api_config = WRMAPIConfig()
 
 @asset(
     name="wrm_stations_raw_data",
     # No partitions_def here - it only fetches current data
     compute_kind="requests",
     group_name="wrm_data_acquisition",
-    required_resource_keys={"s3_resource"}
+    required_resource_keys={"s3_resource"},
+    # Optional: Add vault resource if you need to retrieve secrets during execution
+    # required_resource_keys={"s3_resource", "vault"},
 )
 def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
     """Download raw station data from WRM API and store in S3 without validation"""
@@ -27,7 +68,8 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
     s3_client = context.resources.s3_resource
     
     # API endpoint for WRM bike stations
-    api_url = "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw"
+    # Supports Vault integration: if VAULT_ENABLED=true, reads from Vault
+    api_url = wrm_api_config.api_url
     
     try:
         # Download data from API

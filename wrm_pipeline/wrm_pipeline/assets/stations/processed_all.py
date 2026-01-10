@@ -19,6 +19,35 @@ WRM_STATIONS_RAW_S3_KEY_PATTERN = f"{WRM_STATIONS_S3_PREFIX}raw/dt={{partition_d
 WRM_STATIONS_PROCESSED_S3_KEY_PATTERN = f"{WRM_STATIONS_S3_PREFIX}processed/all/dt={{partition_date}}/all_processed_{{timestamp}}.parquet"
 WRM_STATIONS_ENHANCED_S3_KEY_PATTERN = f"{WRM_STATIONS_S3_PREFIX}enhanced/all/dt={{partition_date}}/all_enhanced_{{timestamp}}.parquet"
 
+# =============================================================================
+# Vault Integration Notes for Station Assets
+# =============================================================================
+# 
+# The station assets (raw_all, processed_all, enhanced_all) are designed to work
+# with or without Vault integration. Sensitive configuration is retrieved via:
+# 
+# 1. Direct config.py values (for non-sensitive config like BUCKET_NAME)
+# 2. Config.py helper functions (get_database_config, get_storage_config) which
+#    automatically fall back to environment variables if Vault is not enabled
+# 3. WRMAPIConfig class in raw_all.py for API URL (supports Vault if enabled)
+# 
+# To enable Vault for these assets:
+# 1. Set VAULT_ENABLED=true in .env
+# 2. Configure VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID
+# 3. Store secrets in Vault at:
+#    - bike-data-flow/production/database (for DB config)
+#    - bike-data-flow/production/storage (for S3 config)
+#    - bike-data-flow/production/api (for API config)
+# 
+# Example Vault secret structure:
+# {
+#   "host": "localhost",
+#   "port": 5432,
+#   "username": "bike_data_flow",
+#   "password": "your-password",
+#   "database": "bike_data"
+# }
+
 @asset(
     name="wrm_stations_processed_data_all",
     partitions_def=daily_partitions,

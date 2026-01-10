@@ -90,14 +90,14 @@
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] Create secret scanner script in wrm_pipeline/wrm_pipeline/migration/scan_secrets.py
-- [ ] T025 [US3] Create environment variable detector in wrm_pipeline/wrm_pipeline/migration/detect_env.py
-- [ ] T026 [US3] Create Vault secret writer in wrm_pipeline/wrm_pipeline/migration/write_to_vault.py
-- [ ] T027 [US3] Create migration orchestrator in wrm_pipeline/wrm_pipeline/migration/migrate.py
-- [ ] T028 [US3] Create path structure validator in wrm_pipeline/wrm_pipeline/migration/validate_paths.py
-- [ ] T029 [US3] Create migration documentation in docs/secret-migration-guide.md
-- [ ] T030 [US3] Update existing assets to use Vault resource instead of environment variables in wrm_pipeline/wrm_pipeline/assets/
-- [ ] T031 [US3] Remove sensitive values from .env files after migration verification
+- [x] T024 [US3] Create secret scanner script in wrm_pipeline/wrm_pipeline/migration/scan_secrets.py
+- [x] T025 [US3] Create environment variable detector in wrm_pipeline/wrm_pipeline/migration/detect_env.py
+- [x] T026 [US3] Create Vault secret writer in wrm_pipeline/wrm_pipeline/migration/write_to_vault.py
+- [x] T027 [US3] Create migration orchestrator in wrm_pipeline/wrm_pipeline/migration/migrate.py
+- [x] T028 [US3] Create path structure validator in wrm_pipeline/wrm_pipeline/migration/validate_paths.py
+- [x] T029 [US3] Create migration documentation in docs/secret-migration-guide.md
+- [x] T030 [US3] Update existing assets to use Vault resource instead of environment variables in wrm_pipeline/wrm_pipeline/assets/
+- [x] T031 [US3] Remove sensitive values from .env files after migration verification
 
 **Checkpoint**: User Story 3 complete - All secrets are stored in Vault, not environment variables
 
