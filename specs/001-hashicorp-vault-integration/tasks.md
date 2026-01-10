@@ -19,11 +19,11 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create vault module directory structure in wrm_pipeline/wrm_pipeline/vault/
-- [ ] T002 [P] Create __init__.py files for vault package in wrm_pipeline/wrm_pipeline/vault/__init__.py
-- [ ] T003 [P] Add hvac dependency to wrm_pipeline/pyproject.toml
-- [ ] T004 [P] Create migration module directory in wrm_pipeline/wrm_pipeline/migration/
-- [ ] T005 [P] Create __init__.py for migration package in wrm_pipeline/wrm_pipeline/migration/__init__.py
+- [x] T001 Create vault module directory structure in wrm_pipeline/wrm_pipeline/vault/
+- [x] T002 [P] Create __init__.py files for vault package in wrm_pipeline/wrm_pipeline/vault/__init__.py
+- [x] T003 [P] Add hvac dependency to wrm_pipeline/pyproject.toml
+- [x] T004 [P] Create migration module directory in wrm_pipeline/wrm_pipeline/migration/
+- [x] T005 [P] Create __init__.py for migration package in wrm_pipeline/wrm_pipeline/migration/__init__.py
 
 ---
 
@@ -33,9 +33,9 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T006 Create Pydantic models in wrm_pipeline/wrm_pipeline/vault/models.py
-- [ ] T007 [P] Create custom exceptions in wrm_pipeline/wrm_pipeline/vault/exceptions.py
-- [ ] T008 [P] Create VaultClient wrapper class with caching in wrm_pipeline/wrm_pipeline/vault/client.py
+- [x] T006 Create Pydantic models in wrm_pipeline/wrm_pipeline/vault/models.py
+- [x] T007 [P] Create custom exceptions in wrm_pipeline/wrm_pipeline/vault/exceptions.py
+- [x] T008 [P] Create VaultClient wrapper class with caching in wrm_pipeline/wrm_pipeline/vault/client.py
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
