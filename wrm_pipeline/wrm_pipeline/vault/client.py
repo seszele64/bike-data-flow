@@ -26,8 +26,10 @@ from wrm_pipeline.wrm_pipeline.vault.exceptions import (
     VaultUninitializedError,
 )
 from wrm_pipeline.wrm_pipeline.vault.models import (
+    AccessPolicy,
     AuditLog,
     AuditOperation,
+    PolicyRule,
     RotationHistory,
     RotationStatus,
     RotationType,
@@ -849,6 +851,248 @@ class VaultClient:
             return []
 
         return self._rotation_scheduler.check_and_rotate(force=force)
+
+    # =========================================================================
+    # Policy Management Methods
+    # =========================================================================
+
+    def _get_policy_manager(self) -> "PolicyManager":
+        """Get or create the policy manager instance.
+
+        Returns:
+            PolicyManager instance
+        """
+        from wrm_pipeline.wrm_pipeline.vault.policies import PolicyManager
+
+        if not hasattr(self, "_policy_manager"):
+            self._policy_manager = PolicyManager(policies_dir="config/vault/policies")
+        return self._policy_manager
+
+    def create_policy_from_model(self, policy: AccessPolicy) -> AccessPolicy:
+        """Create a policy in Vault from an AccessPolicy model.
+
+        Args:
+            policy: AccessPolicy model to create
+
+        Returns:
+            The created policy
+
+        Raises:
+            VaultError: If policy creation fails
+        """
+        from wrm_pipeline.wrm_pipeline.vault.policies import PolicyValidationError
+
+        self._ensure_authenticated()
+
+        manager = self._get_policy_manager()
+
+        try:
+            # Validate the policy
+            manager.validate_policy(policy)
+
+            # Generate HCL
+            hcl_content = manager.to_hcl(policy)
+
+            # Apply to Vault
+            self._get_client().sys.create_or_update_policy(
+                name=policy.name,
+                policy=hcl_content,
+            )
+
+            logger.info(f"Created policy in Vault: {policy.name}")
+            return policy
+
+        except PolicyValidationError as e:
+            raise VaultError(f"Policy validation failed: {e}") from e
+        except Exception as e:
+            raise VaultError(f"Failed to create policy: {e}") from e
+
+    def create_policy_from_hcl(self, name: str, hcl_content: str) -> AccessPolicy:
+        """Create a policy in Vault from HCL content.
+
+        Args:
+            name: Policy name
+            hcl_content: HCL policy content
+
+        Returns:
+            Parsed AccessPolicy model
+
+        Raises:
+            VaultError: If policy creation fails
+        """
+        self._ensure_authenticated()
+
+        manager = self._get_policy_manager()
+
+        try:
+            # Parse HCL to AccessPolicy
+            policy = manager.parse_hcl(hcl_content)
+            policy.name = name  # Ensure name matches
+
+            # Apply to Vault
+            self._get_client().sys.create_or_update_policy(
+                name=name,
+                policy=hcl_content,
+            )
+
+            logger.info(f"Created policy from HCL: {name}")
+            return policy
+
+        except Exception as e:
+            raise VaultError(f"Failed to create policy from HCL: {e}") from e
+
+    def list_policies(self) -> list[str]:
+        """List all policies in Vault.
+
+        Returns:
+            List of policy names
+        """
+        self._ensure_authenticated()
+
+        try:
+            response = self._get_client().sys.list_policies()
+            return response.get("policies", [])
+        except Exception as e:
+            logger.error(f"Failed to list policies: {e}")
+            return []
+
+    def get_policy(self, name: str) -> Optional[str]:
+        """Get a policy's HCL content from Vault.
+
+        Args:
+            name: Policy name
+
+        Returns:
+            HCL policy content or None if not found
+        """
+        self._ensure_authenticated()
+
+        try:
+            response = self._get_client().sys.read_policy(name=name)
+            return response.get("rules", "")
+        except Exception:
+            return None
+
+    def get_policy_model(self, name: str) -> Optional[AccessPolicy]:
+        """Get a policy as an AccessPolicy model.
+
+        Args:
+            name: Policy name
+
+        Returns:
+            AccessPolicy model or None if not found
+        """
+        hcl_content = self.get_policy(name)
+        if hcl_content is None:
+            return None
+
+        manager = self._get_policy_manager()
+        return manager.parse_hcl(hcl_content)
+
+    def delete_policy(self, name: str) -> bool:
+        """Delete a policy from Vault.
+
+        Args:
+            name: Policy name
+
+        Returns:
+            True if deleted, False if not found
+        """
+        self._ensure_authenticated()
+
+        try:
+            self._get_client().sys.delete_policy(name=name)
+            logger.info(f"Deleted policy from Vault: {name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete policy '{name}' from Vault: {e}")
+            return False
+
+    def apply_policy_hcl(self, name: str, hcl_path: str) -> AccessPolicy:
+        """Apply a policy to Vault from an HCL file.
+
+        Args:
+            name: Policy name
+            hcl_path: Path to HCL file
+
+        Returns:
+            AccessPolicy model
+
+        Raises:
+            VaultError: If apply fails
+        """
+        from pathlib import Path
+
+        self._ensure_authenticated()
+
+        hcl_content = Path(hcl_path).read_text()
+        return self.create_policy_from_hcl(name, hcl_content)
+
+    def sync_builtin_policies(self) -> dict[str, bool]:
+        """Sync all built-in policies to Vault.
+
+        Built-in policies:
+        - dagster-secrets: Read access for Dagster pipelines
+        - readonly-secrets: Read-only access for monitoring
+        - admin-secrets: Full admin access
+
+        Returns:
+            Dictionary mapping policy name to success status
+        """
+        from pathlib import Path
+
+        self._ensure_authenticated()
+
+        results: dict[str, bool] = {}
+        policy_files = [
+            ("dagster-secrets", "config/vault/policies/dagster-secrets.hcl"),
+            ("readonly-secrets", "config/vault/policies/readonly-secrets.hcl"),
+            ("admin-secrets", "config/vault/policies/admin-secrets.hcl"),
+        ]
+
+        for policy_name, hcl_path in policy_files:
+            try:
+                if Path(hcl_path).exists():
+                    self.apply_policy_hcl(policy_name, hcl_path)
+                    results[policy_name] = True
+                    logger.info(f"Synced built-in policy: {policy_name}")
+                else:
+                    logger.warning(f"Policy file not found: {hcl_path}")
+                    results[policy_name] = False
+            except Exception as e:
+                logger.error(f"Failed to sync policy '{policy_name}': {e}")
+                results[policy_name] = False
+
+        return results
+
+    def policy_exists(self, name: str) -> bool:
+        """Check if a policy exists in Vault.
+
+        Args:
+            name: Policy name
+
+        Returns:
+            True if policy exists
+        """
+        self._ensure_authenticated()
+
+        try:
+            self._get_client().sys.read_policy(name=name)
+            return True
+        except Exception:
+            return False
+
+    def generate_hcl_from_model(self, policy: AccessPolicy) -> str:
+        """Generate HCL from an AccessPolicy model.
+
+        Args:
+            policy: AccessPolicy model
+
+        Returns:
+            HCL-formatted policy string
+        """
+        manager = self._get_policy_manager()
+        return manager.to_hcl(policy)
 
 
 @lru_cache(maxsize=32)

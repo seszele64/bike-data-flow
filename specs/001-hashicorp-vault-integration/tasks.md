@@ -130,15 +130,15 @@
 
 ### Implementation for User Story 5
 
-- [ ] T038 [US5] Create AccessPolicy model in wrm_pipeline/wrm_pipeline/vault/models.py
-- [ ] T039 [US5] Create PolicyRule model in wrm_pipeline/wrm_pipeline/vault/models.py
-- [ ] T040 [US5] Create policy manager in wrm_pipeline/wrm_pipeline/vault/policies.py
-- [ ] T041 [US5] Implement HCL policy generation in wrm_pipeline/wrm_pipeline/vault/policies.py
-- [ ] T042 [US5] Create dagster-secrets policy file in config/vault/policies/dagster-secrets.hcl
-- [ ] T043 [US5] Create readonly-secrets policy file in config/vault/policies/readonly-secrets.hcl
-- [ ] T044 [US5] Create admin-secrets policy file in config/vault/policies/admin-secrets.hcl
-- [ ] T045 [US5] Create policy management documentation in docs/vault-policies.md
-- [ ] T046 [US5] Update VaultClient to support policy operations in wrm_pipeline/wrm_pipeline/vault/client.py
+- [x] T038 [US5] Create AccessPolicy model in wrm_pipeline/wrm_pipeline/vault/models.py
+- [x] T039 [US5] Create PolicyRule model in wrm_pipeline/wrm_pipeline/vault/models.py
+- [x] T040 [US5] Create policy manager in wrm_pipeline/wrm_pipeline/vault/policies.py
+- [x] T041 [US5] Implement HCL policy generation in wrm_pipeline/wrm_pipeline/vault/policies.py
+- [x] T042 [US5] Create dagster-secrets policy file in config/vault/policies/dagster-secrets.hcl
+- [x] T043 [US5] Create readonly-secrets policy file in config/vault/policies/readonly-secrets.hcl
+- [x] T044 [US5] Create admin-secrets policy file in config/vault/policies/admin-secrets.hcl
+- [x] T045 [US5] Create policy management documentation in docs/vault-policies.md
+- [x] T046 [US5] Update VaultClient to support policy operations in wrm_pipeline/wrm_pipeline/vault/client.py
 
 **Checkpoint**: User Story 5 complete - Fine-grained access control is configured
 
