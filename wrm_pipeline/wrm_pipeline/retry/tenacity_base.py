@@ -46,16 +46,27 @@ def get_stop_strategy(config: RetryConfiguration):
     return stop_after_attempt(config.max_attempts)
 
 
-def get_retry_strategy(config: RetryConfiguration):
+def get_retry_strategy(
+    config: Optional[RetryConfiguration],
+    retry_if: Optional[Callable[[Exception], bool]] = None,
+    default_exceptions: Tuple[Type[Exception], ...] = (Exception,),
+):
     """Create retry strategy from configuration.
     
     Args:
         config: RetryConfiguration with exception types
+        retry_if: Optional custom predicate for retry decisions
+        default_exceptions: Default exception types to use if config is None
         
     Returns:
         Configured retry strategy (can handle multiple exception types)
     """
-    exceptions = config.retry_on_exceptions
+    # If retry_if is provided, use it directly (the caller is responsible for exception filtering)
+    if retry_if is not None:
+        return retry_if
+    
+    # Get exception types from config or use defaults
+    exceptions = config.retry_on_exceptions if config else default_exceptions
     
     if len(exceptions) == 1:
         return retry_if_exception_type(exceptions[0])
@@ -89,11 +100,15 @@ def before_sleep_log(
         )
 
 
-def get_tenacity_decorator(config: RetryConfiguration) -> Callable:
+def get_tenacity_decorator(
+    config: RetryConfiguration,
+    retry_if: Optional[Callable[[tenacity.RetryCallState], bool]] = None,
+) -> Callable:
     """Create a complete tenacity decorator from configuration.
     
     Args:
         config: Complete RetryConfiguration
+        retry_if: Optional custom predicate for retry decisions
         
     Returns:
         Configured tenacity decorator
@@ -101,6 +116,6 @@ def get_tenacity_decorator(config: RetryConfiguration) -> Callable:
     return retry(
         wait=get_wait_strategy(config),
         stop=get_stop_strategy(config),
-        retry=get_retry_strategy(config),
+        retry=get_retry_strategy(config, retry_if=retry_if),
         before_sleep=before_sleep_log,
     )
