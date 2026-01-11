@@ -3,6 +3,7 @@
 from .config import RetryConfiguration
 from .exceptions import RetryExhaustedException, CircuitOpenException
 from .circuit_breaker import CircuitState, CircuitBreakerConfiguration
+from .decorators import with_retry
 
 __all__ = [
     "RetryConfiguration",
@@ -10,6 +11,7 @@ __all__ = [
     "CircuitOpenException",
     "CircuitState",
     "CircuitBreakerConfiguration",
+    "with_retry",
 ]
 
 __version__ = "0.1.0"
