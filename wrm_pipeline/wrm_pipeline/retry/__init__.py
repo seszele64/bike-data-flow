@@ -27,6 +27,18 @@ from .decorators import (
     with_retry_and_circuit_breaker,
     get_circuit_breaker,
 )
+from .operations import (
+    retry_s3_upload,
+    retry_s3_download,
+    retry_s3_delete,
+    retry_s3_list_objects,
+    s3_operation_context,
+    S3OperationHelper,
+    S3OperationError,
+    S3UploadError,
+    S3DownloadError,
+    S3DeleteError,
+)
 
 __all__ = [
     "RetryConfiguration",
@@ -57,6 +69,17 @@ __all__ = [
     "with_circuit_breaker",
     "with_retry_and_circuit_breaker",
     "get_circuit_breaker",
+    # S3 operation helpers
+    "retry_s3_upload",
+    "retry_s3_download",
+    "retry_s3_delete",
+    "retry_s3_list_objects",
+    "s3_operation_context",
+    "S3OperationHelper",
+    "S3OperationError",
+    "S3UploadError",
+    "S3DownloadError",
+    "S3DeleteError",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
