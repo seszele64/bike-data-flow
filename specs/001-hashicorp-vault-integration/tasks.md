@@ -152,14 +152,14 @@
 
 ### Implementation for User Story 6
 
-- [ ] T047 [US6] Create backup script in scripts/vault/backup-vault.sh
-- [ ] T048 [US6] Create restore script in scripts/vault/restore-vault.sh
-- [ ] T049 [US6] Create snapshot manager in wrm_pipeline/wrm_pipeline/vault/backup.py
-- [ ] T050 [US6] Implement automated backup scheduling in wrm_pipeline/wrm_pipeline/vault/backup.py
-- [ ] T051 [US6] Create backup retention policy manager in wrm_pipeline/wrm_pipeline/vault/backup.py
-- [ ] T052 [US6] Configure Hetzner Object Storage integration in wrm_pipeline/wrm_pipeline/vault/backup.py
-- [ ] T053 [US6] Create backup documentation in docs/vault-backup-recovery.md
-- [ ] T054 [US6] Document emergency recovery procedures in docs/vault-emergency-recovery.md
+- [x] T047 [US6] Create backup script in scripts/vault/backup-vault.sh
+- [x] T048 [US6] Create restore script in scripts/vault/restore-vault.sh
+- [x] T049 [US6] Create snapshot manager in wrm_pipeline/wrm_pipeline/vault/backup.py
+- [x] T050 [US6] Implement automated backup scheduling in wrm_pipeline/wrm_pipeline/vault/backup.py
+- [x] T051 [US6] Create backup retention policy manager in wrm_pipeline/wrm_pipeline/vault/backup.py
+- [x] T052 [US6] Configure Hetzner Object Storage integration in wrm_pipeline/wrm_pipeline/vault/backup.py
+- [x] T053 [US6] Create backup documentation in docs/vault-backup-recovery.md
+- [x] T054 [US6] Document emergency recovery procedures in docs/vault-emergency-recovery.md
 
 **Checkpoint**: User Story 6 complete - Backup and restore procedures are tested and documented
 
@@ -173,14 +173,14 @@
 
 ### Implementation for User Story 7
 
-- [ ] T055 [US7] Create AuditLog model in wrm_pipeline/wrm_pipeline/vault/models.py
-- [ ] T056 [US7] Create AuditOperation enum in wrm_pipeline/wrm_pipeline/vault/models.py
-- [ ] T057 [US7] Enable Vault audit device configuration in config/vault/audit-devices.hcl
-- [ ] T058 [US7] Create audit log parser in wrm_pipeline/wrm_pipeline/vault/audit.py
-- [ ] T059 [US7] Implement audit log filtering in wrm_pipeline/wrm_pipeline/vault/audit.py
-- [ ] T060 [US7] Create audit log viewer script in scripts/vault/view-audit-logs.sh
-- [ ] T061 [US7] Configure audit log retention in wrm_pipeline/wrm_pipeline/vault/audit.py
-- [ ] T062 [US7] Create audit logging documentation in docs/vault-audit-logging.md
+- [x] T055 [US7] Create AuditLog model in wrm_pipeline/wrm_pipeline/vault/models.py
+- [x] T056 [US7] Create AuditOperation enum in wrm_pipeline/wrm_pipeline/vault/models.py
+- [x] T057 [US7] Enable Vault audit device configuration in config/vault/audit-devices.hcl
+- [x] T058 [US7] Create audit log parser in wrm_pipeline/wrm_pipeline/vault/audit.py
+- [x] T059 [US7] Implement audit log filtering in wrm_pipeline/wrm_pipeline/vault/audit.py
+- [x] T060 [US7] Create audit log viewer script in scripts/vault/view-audit-logs.sh
+- [x] T061 [US7] Configure audit log retention in wrm_pipeline/wrm_pipeline/vault/audit.py
+- [x] T062 [US7] Create audit logging documentation in docs/vault-audit-logging.md
 
 **Checkpoint**: User Story 7 complete - All secret access operations are logged for audit purposes
 
@@ -190,14 +190,14 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T063 [P] Update wrm_pipeline/README.md with Vault integration documentation
-- [ ] T064 [P] Create comprehensive API documentation in docs/vault-api.md
-- [ ] T065 Create performance benchmark script in scripts/vault/benchmark-latency.py
-- [ ] T066 [P] Add type hints and docstrings to all vault module files
-- [ ] T067 Update .env.example with VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID variables
-- [ ] T068 Create troubleshooting guide in docs/vault-troubleshooting.md
-- [ ] T069 Update deployment documentation with Vault requirements in docs/deployment.md
-- [ ] T070 [P] Run quickstart.md verification checklist from specs/001-hashicorp-vault-integration/quickstart.md
+- [x] T063 [P] Update wrm_pipeline/README.md with Vault integration documentation
+- [x] T064 [P] Create comprehensive API documentation in docs/vault-api.md
+- [x] T065 Create performance benchmark script in scripts/vault/benchmark-latency.py
+- [x] T066 [P] Add type hints and docstrings to all vault module files
+- [x] T067 Update .env.example with VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID variables
+- [x] T068 Create troubleshooting guide in docs/vault-troubleshooting.md
+- [x] T069 Update deployment documentation with Vault requirements in docs/deployment.md
+- [x] T070 [P] Run quickstart.md verification checklist from specs/001-hashicorp-vault-integration/quickstart.md
 
 ---
 
