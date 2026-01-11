@@ -5,14 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 dependencies = [
+    "boto3",
     "dagster",
-    "dagster-cloud",
     "dagster-aws",
+    "dagster-cloud",
+    "ftfy",
+    "hvac",
     "pandas",
     "requests",
-    "ftfy",
-    "boto3",
-    "hvac"
+    "tenacity>=8.0.0"
 ]
 
 [project.optional-dependencies]
