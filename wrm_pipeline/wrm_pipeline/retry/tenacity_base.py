@@ -53,9 +53,19 @@ def get_retry_strategy(config: RetryConfiguration):
         config: RetryConfiguration with exception types
         
     Returns:
-        Configured retry_if_exception_type strategy
+        Configured retry strategy (can handle multiple exception types)
     """
-    return retry_if_exception_type(*config.retry_on_exceptions)
+    exceptions = config.retry_on_exceptions
+    
+    if len(exceptions) == 1:
+        return retry_if_exception_type(exceptions[0])
+    
+    # Chain multiple exception types with | operator (tenacity 8+)
+    retry_strategy = retry_if_exception_type(exceptions[0])
+    for exc_type in exceptions[1:]:
+        retry_strategy = retry_strategy | retry_if_exception_type(exc_type)
+    
+    return retry_strategy
 
 
 def before_sleep_log(
