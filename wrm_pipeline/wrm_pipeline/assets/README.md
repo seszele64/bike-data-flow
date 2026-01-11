@@ -3,14 +3,77 @@
 ### Overview
 The pipeline has 4 main assets that process bike station data through a series of stages:
 
+---
+
+## Vault Integration
+
+### Configuration
+All station assets support **HashiCorp Vault** integration for secure secret management. Sensitive configuration is automatically retrieved from Vault if enabled.
+
+#### Enabling Vault
+
+1. Set these environment variables in `.env`:
+   ```bash
+   VAULT_ENABLED=true
+   VAULT_ADDR=https://vault.internal.bike-data-flow.com:8200
+   VAULT_ROLE_ID=your-role-id
+   VAULT_SECRET_ID=your-secret-id
+   ```
+
+2. Store secrets in Vault at these paths:
+   ```
+   bike-data-flow/production/database
+   bike-data-flow/production/storage
+   bike-data-flow/production/api
+   ```
+
+#### Secret Structure
+
+**Database secrets** (`bike-data-flow/production/database`):
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "username": "bike_data_flow",
+  "password": "your-password",
+  "database": "bike_data"
+}
+```
+
+**Storage secrets** (`bike-data-flow/production/storage`):
+```json
+{
+  "endpoint_url": "https://s3.hetzner.example.com",
+  "access_key_id": "your-access-key",
+  "secret_access_key": "your-secret-key",
+  "region_name": "eu-central-1"
+}
+```
+
+**API secrets** (`bike-data-flow/production/api`):
+```json
+{
+  "wrm_api_url": "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw",
+  "api_key": "your-api-key",
+  "auth_token": "your-auth-token"
+}
+```
+
+#### Fallback Behavior
+
+If Vault is not enabled (default), the system falls back to environment variables defined in `.env`.
+
+---
+
 ### 1. **Raw Data Acquisition** (`wrm_stations_raw_data_asset`)
 - **Purpose**: Downloads current bike station data from WRM API
 - **Key Features**:
-  - Fetches data from `https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw`
+  - Fetches data from WRM API URL (supports Vault for configuration)
   - Fixes text encoding issues using `ftfy`
   - **Duplicate Detection**: Compares hash of new data with most recent file to avoid storing identical data
   - Stores raw data in S3 with timestamp-based naming: `raw/dt=YYYY-MM-DD/wrm_stations_YYYY-MM-DD_HH-MM-SS.txt`
 - **Not Partitioned**: Runs on-demand to fetch current data
+- **Vault Integration**: Uses `WRMAPIConfig` class that can retrieve API URL from Vault
 
 ### 2. **Data Processing** (`wrm_stations_all_processed_asset`)
 - **Purpose**: Validates and processes raw data into structured format
