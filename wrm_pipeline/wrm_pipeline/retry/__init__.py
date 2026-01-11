@@ -2,7 +2,7 @@
 
 from .config import RetryConfiguration
 from .exceptions import RetryExhaustedException, CircuitOpenException
-from .circuit_breaker import CircuitState, CircuitBreakerConfiguration
+from .circuit_breaker import CircuitBreaker, CircuitState, CircuitBreakerConfiguration
 from .tenacity_base import get_tenacity_decorator
 from .decorators import (
     with_retry,
@@ -22,12 +22,17 @@ from .decorators import (
     is_api_retryable_error,
     is_api_retryable_error_state,
     RetryAfterWaitStrategy,
+    # Circuit breaker exports
+    with_circuit_breaker,
+    with_retry_and_circuit_breaker,
+    get_circuit_breaker,
 )
 
 __all__ = [
     "RetryConfiguration",
     "RetryExhaustedException",
     "CircuitOpenException",
+    "CircuitBreaker",
     "CircuitState",
     "CircuitBreakerConfiguration",
     "get_tenacity_decorator",
@@ -48,6 +53,10 @@ __all__ = [
     "is_api_retryable_error",
     "is_api_retryable_error_state",
     "RetryAfterWaitStrategy",
+    # Circuit breaker exports
+    "with_circuit_breaker",
+    "with_retry_and_circuit_breaker",
+    "get_circuit_breaker",
 ]
 
 __version__ = "0.2.0"

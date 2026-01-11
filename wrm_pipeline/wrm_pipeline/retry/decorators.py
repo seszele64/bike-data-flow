@@ -5,6 +5,7 @@ from typing import Callable, Type, Optional, Tuple, Any
 import copy
 import logging
 import email.utils
+import threading
 
 import tenacity
 
@@ -25,6 +26,7 @@ from .tenacity_base import (
     get_retry_strategy,
 )
 from .exceptions import RetryExhaustedException
+from .circuit_breaker import CircuitBreaker, CircuitState, CircuitBreakerConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -672,3 +674,160 @@ def with_s3_download_retry(func: Callable) -> Callable:
     Uses S3_DOWNLOAD preset with 5 attempts, 0.5s base delay, 30s max delay.
     """
     return _apply_tenacity_decorator(func, RetryPresets.S3_DOWNLOAD)
+
+
+# =============================================================================
+# Circuit Breaker Registry and Decorators
+# =============================================================================
+
+# Global circuit breaker registry (for shared circuit breakers)
+_CIRCUIT_BREAKERS: dict[str, CircuitBreaker] = {}
+_CIRCUIT_BREAKER_LOCK = threading.Lock()
+
+
+def get_circuit_breaker(
+    name: str,
+    failure_threshold: int = 5,
+    recovery_timeout: float = 60.0,
+) -> CircuitBreaker:
+    """Get or create a named circuit breaker.
+    
+    Args:
+        name: Unique circuit breaker name
+        failure_threshold: Failures before opening circuit (default: 5)
+        recovery_timeout: Seconds before attempting recovery (default: 60)
+        
+    Returns:
+        CircuitBreaker instance
+    """
+    with _CIRCUIT_BREAKER_LOCK:
+        if name not in _CIRCUIT_BREAKERS:
+            config = CircuitBreakerConfiguration(
+                failure_threshold=failure_threshold,
+                recovery_timeout=recovery_timeout,
+            )
+            _CIRCUIT_BREAKERS[name] = CircuitBreaker(name, config)
+        return _CIRCUIT_BREAKERS[name]
+
+
+def with_circuit_breaker(
+    name: str,
+    failure_threshold: int = 5,
+    recovery_timeout: float = 60.0,
+) -> Callable:
+    """Decorator to add circuit breaker protection to a function.
+    
+    Args:
+        name: Unique circuit breaker name
+        failure_threshold: Failures before opening circuit (default: 5)
+        recovery_timeout: Seconds before attempting recovery (default: 60)
+        
+    Returns:
+        Decorated function with circuit breaker protection
+        
+    Examples:
+        @with_circuit_breaker(name="s3-operations", failure_threshold=3)
+        def upload_to_s3(key: str, data: bytes):
+            s3_client.put_object(Bucket=bucket, Key=key, Body=data)
+    """
+    def decorator(func: Callable) -> Callable:
+        circuit = get_circuit_breaker(name, failure_threshold, recovery_timeout)
+        
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return circuit.call(func, *args, **kwargs)
+        
+        return wrapper
+    return decorator
+
+
+def with_retry_and_circuit_breaker(
+    retry_config: Optional[RetryConfiguration] = None,
+    circuit_breaker_name: Optional[str] = None,
+    failure_threshold: int = 5,
+    recovery_timeout: float = 60.0,
+    max_attempts: Optional[int] = None,
+    base_delay: Optional[float] = None,
+    max_delay: Optional[float] = None,
+    jitter: Optional[float] = None,
+) -> Callable:
+    """Combined retry and circuit breaker decorator.
+    
+    Provides both retry logic with exponential backoff and
+    circuit breaker protection against cascade failures.
+    
+    Args:
+        retry_config: Retry configuration (uses defaults if None)
+        circuit_breaker_name: Name for circuit breaker (auto-generated if None)
+        failure_threshold: Failures before opening circuit (default: 5)
+        recovery_timeout: Seconds before attempting recovery (default: 60)
+        max_attempts: Override max_attempts from retry_config
+        base_delay: Override base_delay from retry_config
+        max_delay: Override max_delay from retry_config
+        jitter: Override jitter from retry_config
+        
+    Returns:
+        Decorated function with both retry and circuit breaker
+        
+    Examples:
+        @with_retry_and_circuit_breaker(
+            retry_config=RetryPresets.S3_UPLOAD,
+            circuit_breaker_name="s3-upload",
+        )
+        def upload_file(path: str):
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        # Get or create circuit breaker
+        cb_name = circuit_breaker_name or f"cb-{func.__name__}"
+        circuit = get_circuit_breaker(cb_name, failure_threshold, recovery_timeout)
+        
+        # Build retry configuration
+        if retry_config is not None:
+            effective_config = copy.copy(retry_config)
+            if max_attempts is not None:
+                effective_config.max_attempts = max_attempts
+            if base_delay is not None:
+                effective_config.base_delay = base_delay
+            if max_delay is not None:
+                effective_config.max_delay = max_delay
+            if jitter is not None:
+                effective_config.jitter = jitter
+        else:
+            effective_config = RetryConfiguration(
+                max_attempts=max_attempts or 3,
+                base_delay=base_delay or 1.0,
+                max_delay=max_delay or 30.0,
+                jitter=jitter or 1.0,
+                retry_on_exceptions=(Exception,),
+            )
+        
+        # Create retry decorator
+        retry_decorator = get_tenacity_decorator(effective_config)
+        
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # First check circuit breaker
+            try:
+                circuit._update_state_for_attempt()
+            except RetryExhaustedException:
+                # Circuit is open - don't retry, just propagate
+                raise
+            
+            # Apply retry to the actual function
+            retried_func = retry_decorator(func)
+            
+            try:
+                result = circuit.call(retried_func, *args, **kwargs)
+                return result
+            except tenacity.RetryError as e:
+                # Retry exhausted - circuit will handle the failure
+                last_exception = e.last_attempt.exception() if e.last_attempt else Exception('Unknown')
+                raise RetryExhaustedException(
+                    message=f'All {effective_config.max_attempts} retry attempts exhausted',
+                    attempts=effective_config.max_attempts,
+                    last_exception=last_exception,
+                ) from last_exception
+        
+        return wrapper
+    return decorator
