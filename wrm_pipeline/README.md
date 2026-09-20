@@ -4,21 +4,26 @@ This is a [Dagster](https://dagster.io/) project scaffolded with [`dagster proje
 
 ## Getting started
 
-First, install your Dagster code location as a Python package. By using the --editable flag, pip will install your Python package in ["editable mode"](https://pip.pypa.io/en/latest/topics/local-project-installs/#editable-installs) so that as you develop, local code changes will automatically apply.
+This repository is a [uv](https://docs.astral.sh/uv/) workspace. The root project (`bike-data-flow`) includes this package as the `wrm_pipeline` workspace member, with all dependency versions locked in the root `uv.lock`. Install the shared environment from the repository root:
 
 ```bash
-pip install -e ".[dev]"
+# from the repository root (--all-packages includes this package's dev group)
+uv sync --frozen --all-packages
 ```
 
-Then, start the Dagster UI web server:
+`wrm_pipeline` is installed into the shared virtual environment in editable mode, so as you develop, local code changes automatically apply.
+
+Then, start the Dagster UI web server (Dagster reads the `[tool.dagster]` section of this directory's `pyproject.toml`):
 
 ```bash
-dagster dev
+# from the wrm_pipeline/ directory
+cd wrm_pipeline
+uv run dagster dev
 ```
 
 Open http://localhost:3000 with your browser to see the project.
 
-You can start writing assets in `wrm_pipeline/assets.py`. The assets are automatically loaded into the Dagster code location as you define them.
+You can start writing assets in `wrm_pipeline/assets/`. The assets are automatically loaded into the Dagster code location as you define them.
 
 ## HashiCorp Vault Integration
 
@@ -238,12 +243,17 @@ elif health.status == VaultHealthStatus.SEALED:
 
 #### Running Tests
 
+Tests live in [`wrm_pipeline/tests/`](tests/) (`unit/` and `integration/`). Pytest is configured in the root `pyproject.toml` under `[tool.pytest.ini_options]`; the default run targets the **unit suite only**.
+
 ```bash
-# Run all tests
-pytest wrm_pipeline_tests
+# Run the unit test suite (recorded baseline: 149 passed)
+uv run pytest
 
 # Run vault-specific tests
-pytest wrm_pipeline_tests -k vault
+uv run pytest -k vault
+
+# Run integration tests explicitly (auto-marked `integration`, excluded from the default run)
+uv run pytest wrm_pipeline/tests/integration -m integration
 ```
 
 #### Local Development with Vault

@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from dagster import ResourceDefinition
+from dagster import Field, ResourceDefinition
 
 from wrm_pipeline.wrm_pipeline.vault.client import VaultClient
 from wrm_pipeline.wrm_pipeline.vault.exceptions import (
@@ -479,7 +479,18 @@ def vault_secrets_resource(
         return resource
 
     return ResourceDefinition(
-        resource_def=create_resource,
-        config_schema=VaultSecretsResourceConfig,
+        resource_fn=create_resource,
+        config_schema={
+            "vault_addr": Field(str, is_required=False, default_value="https://vault.internal.bike-data-flow.com:8200"),
+            "auth_method": Field(str, is_required=False, default_value="approle"),
+            "role_id": Field(str, is_required=False),
+            "secret_id": Field(str, is_required=False),
+            "token": Field(str, is_required=False),
+            "namespace": Field(str, is_required=False),
+            "timeout": Field(int, is_required=False, default_value=30),
+            "retries": Field(int, is_required=False, default_value=3),
+            "cache_ttl": Field(int, is_required=False, default_value=300),
+            "verify": Field(bool, is_required=False, default_value=True),
+        },
         description="Resource for retrieving secrets from HashiCorp Vault with caching",
     )

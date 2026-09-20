@@ -3,23 +3,28 @@ name = "wrm_pipeline"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "boto3",
     "dagster",
     "dagster-aws",
     "dagster-cloud",
+    "duckdb",
     "ftfy",
     "hvac",
+    "minio",
     "pandas",
+    "pandera",
+    "python-dotenv",
     "requests",
     "tenacity>=8.0.0"
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "dagster-webserver", 
-    "pytest",
+    "dagster-webserver",
+    "pytest>=9",
+    "pytest-cov",
 ]
 
 [build-system]
@@ -31,4 +36,4 @@ module_name = "wrm_pipeline.definitions"
 code_location_name = "wrm_pipeline"
 
 [tool.setuptools.packages.find]
-exclude=["wrm_pipeline_tests"]
+include = ["wrm_pipeline*"]

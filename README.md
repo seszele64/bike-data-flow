@@ -207,7 +207,15 @@ bike-data-flow/
 │   │   └── stations.py                 # Processing job definitions
 │   ├── models/
 │   │   └── stations.py                 # Data models and schemas
-│   └── config.py                       # Configuration management
+│   ├── tests/
+│   │   ├── unit/                       # Unit tests (default pytest target)
+│   │   ├── integration/                # Integration tests (run with -m integration)
+│   │   └── BASELINE.md                 # Recorded pre-ETL pytest baseline
+│   ├── config.py                       # Configuration management
+│   └── pyproject.toml                  # Package metadata & dependency groups
+├── pyproject.toml                      # uv workspace root & pytest configuration
+├── conftest.py                         # Shared pytest fixtures & marker bootstrap
+├── uv.lock                             # Locked workspace dependency versions
 └── README.md                           # Project documentation
 ```
 
@@ -301,12 +309,16 @@ with duckdb.connect(db_path) as conn:
 - Set environment variables
 
 ### 2. **Deploy Pipeline**
+
+Requires [uv](https://docs.astral.sh/uv/) — Python 3.12 is pinned via `.python-version` and provisioned automatically.
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (uv workspace; resolved from uv.lock; --all-packages
+# includes wrm_pipeline's dev group: pytest, pytest-cov, dagster-webserver)
+uv sync --frozen --all-packages
 
 # Launch Dagster UI
-dagster-webserver -f wrm_pipeline
+uv run dagster-webserver -f wrm_pipeline
 ```
 
 ### 3. **Enable Automation**
@@ -323,6 +335,26 @@ dagster-webserver -f wrm_pipeline
 - Use DuckDB CLI or Python for data analysis
 - Query enhanced views for insights
 - Build dashboards using latest station views
+
+## 🧪 Testing
+
+Tests live in [`wrm_pipeline/tests/`](wrm_pipeline/tests/) (`unit/` and `integration/`), with pytest configured in the root [`pyproject.toml`](pyproject.toml) under `[tool.pytest.ini_options]`. The default run collects the **unit suite only** (`testpaths = ["wrm_pipeline/tests/unit"]`).
+
+```bash
+# Install/sync the environment first (--all-packages includes the dev group)
+uv sync --frozen --all-packages
+
+# Unit tests (recorded baseline: 149 passed — see wrm_pipeline/tests/BASELINE.md)
+uv run pytest
+
+# Integration tests — explicitly selected; currently a placeholder suite
+uv run pytest wrm_pipeline/tests/integration -m integration
+
+# Filter by keyword
+uv run pytest -k vault
+```
+
+Registered markers: `integration` (touches external systems — S3, Vault, live APIs), `evidence` (asserts against recorded baseline/evidence artifacts), `slow` (excluded from the fast feedback loop). Tests collected from `tests/integration/` are auto-marked `integration` by the root `conftest.py`.
 
 ## 🔍 Monitoring & Operations
 

@@ -1,0 +1,29 @@
+[project]
+name = "bike-data-flow"
+version = "0.1.0"
+requires-python = ">=3.10,<3.14"
+dependencies = ["wrm-pipeline"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+wrm-pipeline = { workspace = true }
+
+[tool.uv.workspace]
+members = ["wrm_pipeline"]
+
+[tool.pytest.ini_options]
+# Unit tests only by default; integration tests run explicitly via
+# `pytest wrm_pipeline/tests/integration -m integration`.
+testpaths = ["wrm_pipeline/tests/unit"]
+# Put the repo root on sys.path for console `pytest` invocations (the console
+# script does not get cwd on sys.path like `python -m pytest` does). Required
+# for legacy `wrm_pipeline.wrm_pipeline.*` absolute imports to resolve.
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: touches external systems (S3, Vault, live APIs); select with -m integration",
+    "evidence: asserts against recorded baseline/evidence artifacts",
+    "slow: long-running tests excluded from the fast feedback loop",
+]

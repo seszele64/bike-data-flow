@@ -4,7 +4,6 @@ from pydantic import Field
 from minio import Minio
 from minio.error import S3Error
 from contextlib import contextmanager
-import psycopg2
 from dagster_aws.s3.resources import S3Resource
 from typing import Optional
 
@@ -64,15 +63,18 @@ class PostgreSQLResource(ConfigurableResource):
     """PostgreSQL resource that can use Vault for credentials."""
     host: str = Field(default=EnvVar("POSTGRES_HOST"))
     port: int = Field(default=EnvVar("POSTGRES_PORT"))
-    database: str = Field(default=EnvVar("POSTGRES_DB"))
-    user: str = Field(default=EnvVar("POSTGRES_USER"))
-    password: str = Field(default=EnvVar("POSTGRES_PASSWORD"))
+    database: Optional[str] = Field(default=EnvVar("POSTGRES_DB"))
+    user: Optional[str] = Field(default=EnvVar("POSTGRES_USER"))
+    password: Optional[str] = Field(default=EnvVar("POSTGRES_PASSWORD"))
     use_vault: bool = Field(default=False, description="Use Vault for credentials")
     vault_path: str = Field(default="bike-data-flow/production/database")
     
     @contextmanager
     def get_connection(self):
         """Get a database connection."""
+        # psycopg2 is an optional dependency, imported lazily like the Vault client above
+        import psycopg2
+
         # If Vault is enabled, fetch credentials from Vault
         if self.use_vault:
             try:
@@ -146,7 +148,13 @@ s3_resource = S3Resource(**s3_resource_config)
 
 import os
 from dagster import Definitions, EnvVar
-from dagster_duckdb_pandas import DuckDBPandasIOManager
+
+# dagster-duckdb-pandas is an optional integration; the DuckDB IO managers it
+# provides are not referenced by any asset, so degrade gracefully when missing.
+try:
+    from dagster_duckdb_pandas import DuckDBPandasIOManager
+except ImportError:
+    DuckDBPandasIOManager = None
 from dagster_aws.s3.io_manager import s3_pickle_io_manager
 
 # Ensure the data directory exists
@@ -154,36 +162,48 @@ data_dir = os.path.join(os.path.expanduser("~"), "data")
 os.makedirs(data_dir, exist_ok=True)
 
 # DuckDB I/O Manager with S3 integration
-duckdb_io_manager = DuckDBPandasIOManager(
-    database=os.path.join(data_dir, "analytics.duckdb"),
-    schema="wrm_analytics"
+duckdb_io_manager = (
+    DuckDBPandasIOManager(
+        database=os.path.join(data_dir, "analytics.duckdb"),
+        schema="wrm_analytics"
+    )
+    if DuckDBPandasIOManager is not None
+    else None
 )
 
 # DuckDB I/O Manager with S3 secret for cloud storage integration
-duckdb_s3_io_manager = DuckDBPandasIOManager(
-    database=f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}duckdb/analytics.duckdb",
-    connection_config={
-        "s3_region": "auto",
-        "s3_access_key_id": HETZNER_ACCESS_KEY_ID,
-        "s3_secret_access_key": HETZNER_SECRET_ACCESS_KEY,
-        "s3_endpoint": HETZNER_ENDPOINT_URL,
-        "s3_use_ssl": "true",
-        "s3_url_style": "path"
-    }
+duckdb_s3_io_manager = (
+    DuckDBPandasIOManager(
+        database=f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}duckdb/analytics.duckdb",
+        connection_config={
+            "s3_region": "auto",
+            "s3_access_key_id": HETZNER_ACCESS_KEY_ID,
+            "s3_secret_access_key": HETZNER_SECRET_ACCESS_KEY,
+            "s3_endpoint": HETZNER_ENDPOINT_URL,
+            "s3_use_ssl": "true",
+            "s3_url_style": "path"
+        }
+    )
+    if DuckDBPandasIOManager is not None
+    else None
 )
 
 # Local DuckDB with S3 extension for hybrid operations
-duckdb_hybrid_io_manager = DuckDBPandasIOManager(
-    database=os.path.join(data_dir, "analytics.duckdb"),
-    schema="wrm_analytics",
-    connection_config={
-        "s3_region": "auto",
-        "s3_access_key_id": HETZNER_ACCESS_KEY_ID,
-        "s3_secret_access_key": HETZNER_SECRET_ACCESS_KEY,
-        "s3_endpoint": HETZNER_ENDPOINT_URL,
-        "s3_use_ssl": "true",
-        "s3_url_style": "path"
-    }
+duckdb_hybrid_io_manager = (
+    DuckDBPandasIOManager(
+        database=os.path.join(data_dir, "analytics.duckdb"),
+        schema="wrm_analytics",
+        connection_config={
+            "s3_region": "auto",
+            "s3_access_key_id": HETZNER_ACCESS_KEY_ID,
+            "s3_secret_access_key": HETZNER_SECRET_ACCESS_KEY,
+            "s3_endpoint": HETZNER_ENDPOINT_URL,
+            "s3_use_ssl": "true",
+            "s3_url_style": "path"
+        }
+    )
+    if DuckDBPandasIOManager is not None
+    else None
 )
 
 # S3 I/O Manager for raw data storage with proper prefix

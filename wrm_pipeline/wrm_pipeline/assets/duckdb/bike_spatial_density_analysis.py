@@ -3,7 +3,6 @@ import duckdb
 import os
 import pandas as pd
 import math
-from geopy.distance import geodesic
 from typing import Dict, List, Tuple
 
 from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT, db_path
@@ -192,9 +191,6 @@ def _analyze_grid_density(
 
 # ==================================== MAP =================================== #
 
-import plotly.graph_objects as go
-import plotly.express as px
-import numpy as np
 from dagster import MaterializeResult, MetadataValue
 
 @asset(
@@ -257,11 +253,12 @@ def bike_density_map(context: AssetExecutionContext, bike_density_spatial_analys
         context.log.error(f"Failed to create bike density map: {e}")
         raise
 
-def _create_density_map(grid_data: List[Dict], spatial_bounds: Dict, context) -> go.Figure:
+def _create_density_map(grid_data: List[Dict], spatial_bounds: Dict, context) -> "go.Figure":
     """
     Create the Plotly interactive map figure
     """
-    
+    # plotly is an optional dependency, only needed by the map visualization asset
+    import plotly.graph_objects as go
     # Prepare data for plotting
     lats = [sq["grid_lat"] for sq in grid_data]
     lons = [sq["grid_lon"] for sq in grid_data]

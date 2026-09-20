@@ -32,6 +32,10 @@ dagster_home
 # ignore Claude Code internals
 .roo/
 
+# local tool caches (serena MCP, pytest)
+.serena/
+.pytest_cache/
+
 # IDE
 .idea/
 *.swp
