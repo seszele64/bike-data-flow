@@ -1,4 +1,4 @@
-from dagster import Definitions, env_var, load_assets_from_modules
+from dagster import Definitions, EnvVar, load_assets_from_modules
 import os
 from dotenv import load_dotenv
 
@@ -31,26 +31,31 @@ defs = Definitions(
         wrm_stations_raw_data_sensor,
     ],
     resources={
-        "s3_resource": s3_resource,
-        "s3": s3_resource,  # Add this - s3_io_manager expects key "s3"
-        "postgres_resource": postgres_resource,
-        "duckdb_io_manager": duckdb_io_manager,
-        "duckdb_s3_io_manager": duckdb_s3_io_manager,
-        "duckdb_hybrid_io_manager": duckdb_hybrid_io_manager,
-        "s3_io_manager": s3_io_manager,
-        "hive_partitioned_s3_io_manager": hive_partitioned_s3_io_manager,
-        "vault": vault_secrets_resource.configured(
-            {
-                "vault_addr": env_var("VAULT_ADDR", "https://vault.internal.bike-data-flow.com:8200"),
-                "auth_method": env_var("VAULT_AUTH_METHOD", "approle"),
-                "role_id": env_var("VAULT_ROLE_ID"),
-                "secret_id": env_var("VAULT_SECRET_ID"),
-                "timeout": 30,
-                "retries": 3,
-                "cache_ttl": 300,
-                "verify": True,
-            }
-        ),
+        key: resource
+        for key, resource in {
+            "s3_resource": s3_resource,
+            "s3": s3_resource,  # Add this - s3_io_manager expects key "s3"
+            "postgres_resource": postgres_resource,
+            "duckdb_io_manager": duckdb_io_manager,
+            "duckdb_s3_io_manager": duckdb_s3_io_manager,
+            "duckdb_hybrid_io_manager": duckdb_hybrid_io_manager,
+            "s3_io_manager": s3_io_manager,
+            "hive_partitioned_s3_io_manager": hive_partitioned_s3_io_manager,
+            "vault": vault_secrets_resource().configured(
+                {
+                    "vault_addr": EnvVar("VAULT_ADDR"),
+                    "auth_method": EnvVar("VAULT_AUTH_METHOD"),
+                    "role_id": EnvVar("VAULT_ROLE_ID"),
+                    "secret_id": EnvVar("VAULT_SECRET_ID"),
+                    "timeout": 30,
+                    "retries": 3,
+                    "cache_ttl": 300,
+                    "verify": True,
+                }
+            ),
+        }.items()
+        # Skip resources backed by integrations that are not installed
+        if resource is not None
     },
     schedules=[]
 )
