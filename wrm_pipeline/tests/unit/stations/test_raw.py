@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from dagster import build_asset_context
@@ -74,7 +74,7 @@ class TestWRMStationsRawDataAsset:
         mock_response.raise_for_status = Mock()
         mock_requests.return_value = mock_response
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         asset_context.resources.s3_resource.list_objects_v2.return_value = {}
@@ -84,6 +84,7 @@ class TestWRMStationsRawDataAsset:
         result = wrm_stations_raw_data_asset(asset_context)
         
         # Assertions
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         expected_s3_key = f"{WRM_STATIONS_S3_PREFIX}raw/dt=2024-01-15/wrm_stations_2024-01-15_10-30-45.txt"
         assert result == expected_s3_key
         
@@ -108,7 +109,7 @@ class TestWRMStationsRawDataAsset:
         fixed_text = 'Station name with encoding issues'
         mock_ftfy.return_value = fixed_text
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         asset_context.resources.s3_resource.list_objects_v2.return_value = {}
@@ -118,6 +119,7 @@ class TestWRMStationsRawDataAsset:
         wrm_stations_raw_data_asset(asset_context)
         
         # Assertions
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         mock_ftfy.assert_called_once_with(corrupted_api_response)
         call_args = asset_context.resources.s3_resource.put_object.call_args
         assert call_args[1]['Body'] == fixed_text.encode('utf-8')
@@ -132,7 +134,7 @@ class TestWRMStationsRawDataAsset:
         mock_response.raise_for_status = Mock()
         mock_requests.return_value = mock_response
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         # Mock existing file with same content
@@ -152,6 +154,7 @@ class TestWRMStationsRawDataAsset:
         result = wrm_stations_raw_data_asset(asset_context)
         
         # Assertions
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         assert result == existing_key
         asset_context.resources.s3_resource.put_object.assert_not_called()
 
@@ -165,7 +168,7 @@ class TestWRMStationsRawDataAsset:
         mock_response.raise_for_status = Mock()
         mock_requests.return_value = mock_response
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         # Mock existing file with different content
@@ -187,6 +190,7 @@ class TestWRMStationsRawDataAsset:
         result = wrm_stations_raw_data_asset(asset_context)
         
         # Assertions
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         expected_s3_key = f"{WRM_STATIONS_S3_PREFIX}raw/dt=2024-01-15/wrm_stations_2024-01-15_10-30-45.txt"
         assert result == expected_s3_key
         asset_context.resources.s3_resource.put_object.assert_called_once()
@@ -201,7 +205,7 @@ class TestWRMStationsRawDataAsset:
         mock_response.raise_for_status = Mock()
         mock_requests.return_value = mock_response
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         asset_context.resources.s3_resource.list_objects_v2.return_value = {}
@@ -210,6 +214,8 @@ class TestWRMStationsRawDataAsset:
         
         # Execute
         wrm_stations_raw_data_asset(asset_context)
+        
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         
         # Calculate expected hash
         expected_hash = hashlib.sha256(sample_api_response.encode('utf-8')).hexdigest()
@@ -238,7 +244,7 @@ class TestWRMStationsRawDataAsset:
         mock_response.raise_for_status = Mock()
         mock_requests.return_value = mock_response
         
-        mock_now = datetime(2024, 1, 15, 10, 30, 45)
+        mock_now = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
         mock_datetime.now.return_value = mock_now
         
         asset_context.resources.s3_resource.list_objects_v2.return_value = {}
@@ -248,6 +254,7 @@ class TestWRMStationsRawDataAsset:
         wrm_stations_raw_data_asset(asset_context)
         
         # Assertions
+        mock_datetime.now.assert_called_once_with(timezone.utc)
         expected_url = "https://gladys.geog.ucl.ac.uk/bikesapi/load.php?scheme=wroclaw"
         mock_requests.assert_called_once_with(expected_url, timeout=30)
         mock_response.raise_for_status.assert_called_once()
