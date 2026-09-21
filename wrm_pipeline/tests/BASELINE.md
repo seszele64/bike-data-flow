@@ -154,21 +154,25 @@ uv run python -c "from wrm_pipeline.definitions import defs; print(len(list(defs
 
 # Post-ETL Regression Evidence
 
-**Step:** S5 (etl-repair subtask) · **Recorded:** 2026-09-20 (21:51 +0200)
+**Step:** S5 (etl-repair subtask) · **Recorded:** 2026-09-20 (21:51 +0200) ·
+**Re-verified:** 2026-09-21 at `bdafd74` (clean tree; counts and refs below
+refreshed against the committed state)
 
 Evidence snapshot of the pytest suite **after** the ETL work (S2 parquet/S3
-write in `processed_all.py`, S3 job/schedule wiring, S4 unified DuckDB path).
-Same command, same worktree lineage as the pre-ETL baseline above. Nothing
-below was edited retroactively; this section was appended after all runs.
+write in `processed_all.py`, S3 job/schedule wiring, S4 unified DuckDB path)
+plus the M1 T1-A ingest-decoupling work (transform-only job, loop-safe
+sensor, hourly ingest schedule — see §9). Same command, same worktree
+lineage as the pre-ETL baseline above; counts and references were re-verified
+at `bdafd74` after the S2–S4 and M1 work was committed.
 
 ## 9. Snapshot Metadata
 
 | Field | Value |
 |---|---|
-| Branch | `agent-etl-repair` |
-| Commit | `b2074a358e9ed34cdb7af10511ecfbd0bf906d71` (`chore: uv + pytest migration baseline (T1-T3) (#39)`) |
+| Branch | `agent/etl-repair` |
+| Commit | `bdafd74e8d8f65e587b8384d2121f90191827cff` (`feat(pipeline): decouple raw ingest from transform; loop-safe sensor + hourly ingest schedule (M1 T1-A)`, 2026-09-21 15:13:56 +0200) |
 | Worktree | `/root/programming/bike-data-flow.agent-etl-repair` |
-| Working tree | **Dirty** — contains the uncommitted S2–S4 changes: `wrm_pipeline/wrm_pipeline/assets/stations/processed_all.py` (S2, pyarrow schema validation + parquet-to-S3 write), `wrm_pipeline/wrm_pipeline/jobs/stations.py` + `wrm_pipeline/wrm_pipeline/definitions.py` (S3, job selection + daily schedule), `wrm_pipeline/wrm_pipeline/config.py` + `wrm_pipeline/wrm_pipeline/resources.py` (S4, `WRM_DUCKDB_PATH` / `db_path`), `wrm_pipeline/pyproject.toml` + `uv.lock` (adds `pyarrow>=15`), plus tests `tests/unit/stations/test_processed.py` (+3) and new `tests/unit/test_definitions.py`, `tests/unit/test_config_paths.py`. |
+| Working tree | **Clean** — the S2–S4 work and the M1 T1-A/T2-A/T3-A fixes are all committed; counts below reflect exactly HEAD `bdafd74`. Lineage since the uv-migration baseline `b2074a3`: `f4b3bfb` (S2–S4: parquet/S3 persistence + daily schedule; new `test_definitions.py`, `test_config_paths.py`), `dd0ae00` (S4: DuckDB repo-root path), `ff07c67` (T3-A: empty-`WRM_DUCKDB_PATH` fail-fast guard), `1ea744f` (T2-A: UTC-pinned partitions; new `test_partitions.py`), `bdafd74` (T1-A: transform/ingest decoupling, loop-safe sensor, hourly ingest schedule; expanded `test_definitions.py`, new `test_sensor.py`). |
 
 ## 10. Environment
 
@@ -187,19 +191,20 @@ below was edited retroactively; this section was appended after all runs.
 ## 11. Results
 
 ```bash
-uv run pytest   # run 1 → 174 passed, 3 skipped, 15 warnings in 18.89s
-uv run pytest   # run 2 → 174 passed, 3 skipped, 15 warnings in 15.64s
+uv run pytest   # run 1 → 206 passed, 3 skipped, 1 xfailed, 15 warnings in 16.91s
+uv run pytest   # run 2 → 206 passed, 3 skipped, 1 xfailed, 15 warnings in 18.43s
 ```
 
 | Metric | Post-ETL | Pre-ETL | Δ |
 |---|---|---|---|
-| Collected | 177 | 149 | +28 |
-| Passed | **174** | 149 | +25 |
+| Collected | 210 | 149 | +61 |
+| Passed | **206** | 149 | +57 |
 | Failed / Errors | **0 / 0** | 0 / 0 | 0 |
 | Skipped | 3 | 0 | +3 (see §14) |
+| XFailed | 1 | 0 | +1 (see §14) |
 | Warnings | 15 (Pydantic deprecations) | 0 recorded | see §14 |
 
-### Per-file breakdown (177)
+### Per-file breakdown (210)
 
 | Test file | Tests | Δ vs pre-ETL |
 |---|---|---|
@@ -208,14 +213,19 @@ uv run pytest   # run 2 → 174 passed, 3 skipped, 15 warnings in 15.64s
 | `wrm_pipeline/tests/unit/retry/test_config.py` | 8 | — |
 | `wrm_pipeline/tests/unit/retry/test_s3_helpers.py` | 21 | — |
 | `wrm_pipeline/tests/unit/retry/test_s3_retry.py` | 27 | — |
+| `wrm_pipeline/tests/unit/stations/test_partitions.py` (new, T2-A) | 3 | +3 |
 | `wrm_pipeline/tests/unit/stations/test_processed.py` | 17 | +3 (14 → 17) |
 | `wrm_pipeline/tests/unit/stations/test_raw.py` | 7 | — |
-| `wrm_pipeline/tests/unit/test_config_paths.py` (new) | 15 | +15 |
-| `wrm_pipeline/tests/unit/test_definitions.py` (new) | 10 | +10 |
-| **Total** | **177** | **+28** |
+| `wrm_pipeline/tests/unit/stations/test_sensor.py` (new, T1-A) | 12 | +12 |
+| `wrm_pipeline/tests/unit/test_config_paths.py` (new) | 17 | +17 |
+| `wrm_pipeline/tests/unit/test_definitions.py` (new) | 26 | +26 |
+| **Total** | **210** | **+61** |
 
-Note: `test_config_paths.py` defines 13 test functions; 15 collect because two
-are parametrized (remote-URI directory-creation cases).
+Note: `test_definitions.py` grew 10 → 26 at `bdafd74` (T1-A added the
+ingest-job, ingest-schedule, and daily-tick partition-key contract classes,
+including the xfail boundary test). `test_config_paths.py` defines 15 test
+functions; 17 collect because two are parametrized (remote-URI
+directory-creation cases).
 
 ## 12. Definitions Validation
 
@@ -229,41 +239,38 @@ uv run dagster definitions validate -m wrm_pipeline.definitions
 
 ## 13. Static Grep Checks
 
-1. **Job selection contains the raw asset** — `jobs/stations.py:9-12` selects
-   `wrm_stations_raw_data_asset` + `wrm_stations_processed_data_all_asset` +
-   `wrm_stations_enhanced_data_all_asset`. PASS.
-2. **Daily schedule at 05:00** — `definitions.py:29-33` defines
-   `ScheduleDefinition(job=wrm_stations_processing_job, name="daily",
-   cron_schedule="0 5 * * *")`, registered in `defs` schedules
-   (`definitions.py:71`). PASS.
-3. **No `~/data` DuckDB hits** — `grep -rn '\.data\|~/' wrm_pipeline/wrm_pipeline
-   --include='*.py' | grep -i duckdb` → **0 matches**. DuckDB path is now the
-   repo-root default `db/analytics.duckdb` via `config.py:203-212`
-   (`WRM_DUCKDB_PATH` override), consumed by `resources.py:162-193`
-   (`database=db_path`). PASS.
-   Residual (non-duckdb): `assets/duckdb/bike_spatial_density_analysis.py:218`
-   still writes visualizations to `~/data/visualizations` — pre-existing, out
-   of S4 duckdb scope, unchanged.
+1. **Job selection contains the raw asset** — `jobs/stations.py:10-17` defines `wrm_stations_processing_job` selecting `wrm_stations_processed_data_all_asset` + `wrm_stations_enhanced_data_all_asset` (lines 12-15), with the raw asset deliberately excluded; `jobs/stations.py:22-26` defines the dedicated, unpartitioned `wrm_stations_ingest_job` selecting `wrm_stations_raw_data_asset` (line 24). PASS.
+2. **Daily schedule at 05:00 + hourly ingest schedule** — `definitions.py:42-60` defines the daily `@schedule` on `wrm_stations_processing_job` (`name="daily"`, `cron_schedule="0 5 * * *"`, decorator at 42-47) targeting yesterday's partition via a partition-keyed RunRequest, and `definitions.py:67-78` defines the hourly ingest `@schedule` on `wrm_stations_ingest_job` (`name="ingest"`, `INGEST_CRON_SCHEDULE` = `"0 * * * *"`, decorator at 70-75); both are registered in `defs` schedules (`definitions.py:117-120`). PASS.
+3. **No `~/data` DuckDB hits** — `grep -rn '\.data\|~/' wrm_pipeline/wrm_pipeline --include='*.py' | grep -i duckdb` → **0 matches** (re-verified at `bdafd74`). DuckDB path is now the repo-root default `db/analytics.duckdb` via `config.py:203-213` (`db_path` at 207; `WRM_DUCKDB_PATH` override with an empty value treated as unset; directory created at import, 212-213), consumed by `resources.py:169-175` (empty-`db_path` fail-fast guard at 169-172, `database=db_path` wiring at 175). PASS.
+   Residual (non-duckdb): `assets/duckdb/bike_spatial_density_analysis.py:218` still writes visualizations to `~/data/visualizations` — pre-existing, out of S4 duckdb scope, unchanged.
 
 ## 14. Skips, Warnings, and Known Risks
 
-- **3 skips, all in `test_config_paths.py:163/170/177`:** reason is
+- **3 skips, all in `test_config_paths.py:172/179/186`:** reason is
   `dagster-duckdb-pandas not installed; duckdb IO manager is None (optional
   integration degraded gracefully)`. Intentional degradation, not a failure;
   they assert the IO manager is `None` when the optional package is absent.
+- **1 xfail (expected failure):**
+  `test_definitions.py::TestDailyScheduleTickPartitionKey::test_tick_on_partition_start_date_yields_valid_key` —
+  a tick exactly on the partitions' `start_date` (2025-05-01T05:00Z) derives
+  key `2025-04-30`, which predates
+  `DailyPartitionsDefinition(start_date='2025-05-01')`, so `evaluate_tick`
+  raises `DagsterUnknownPartitionError` while resolving partition tags.
+  Unreachable in production (deployed 2026); will XPASS if the schedule ever
+  clamps to the first valid partition.
 - **15 warnings (new vs pre-ETL's "none"):** all
   `PydanticDeprecatedSince20` "class-based `config` is deprecated"
-  warnings from `wrm_pipeline/wrm_pipeline/vault/models.py` (lines 374–667),
-  surfaced by the new tests' import graph pulling in the vault module.
-  Non-fatal; would break on Pydantic V3. Not addressed in this step.
+  warnings from `wrm_pipeline/wrm_pipeline/vault/models.py` (15 model
+  classes, lines 45–667), surfaced by the new tests' import graph pulling in
+  the vault module. Non-fatal; would break on Pydantic V3. Not addressed in
+  this step.
 - **Dagster CLI supersession:** `dagster definitions validate` emits
   `SupersessionWarning: use 'dg check defs' instead`. Command still works on
   dagster 1.13.23; migrate later.
-- **Uncommitted S2–S4 state:** counts reflect HEAD `b2074a3` + uncommitted
-  work-tree changes. If the S2–S4 work is committed/amended, re-verify counts
-  once against the new commit.
-- **Timing variance:** 18.89 s (single S5 run) vs 15.36–16.89 s pre-ETL;
-  duration remains advisory only.
+- **Committed state:** counts reflect exactly HEAD `bdafd74` (clean tree);
+  this post-ETL section was re-verified and refreshed there on 2026-09-21.
+- **Timing variance:** 16.91–18.43 s (`bdafd74` runs) vs 15.36–16.89 s
+  pre-ETL; duration remains advisory only.
 - **Empty integration suite** (`tests/integration/`, 0 tests) still a
   placeholder — ETL integration coverage remains a gap.
 
@@ -272,7 +279,7 @@ uv run dagster definitions validate -m wrm_pipeline.definitions
 ```bash
 cd /root/programming/bike-data-flow.agent-etl-repair
 uv sync --all-packages
-uv run pytest                                            # expect: 174 passed, 3 skipped
+uv run pytest                                            # expect: 206 passed, 3 skipped, 1 xfailed
 uv run dagster definitions validate -m wrm_pipeline.definitions
                                                          # expect: all code locations passed
 uv run python -c "from wrm_pipeline.definitions import defs; print(len(list(defs.assets)))"
