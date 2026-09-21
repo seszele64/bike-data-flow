@@ -1,11 +1,19 @@
 """Unit tests for the wrm_pipeline Dagster Definitions (code location).
 
-Locks in the S3-step contract:
+Locks in the T1-A ingest/transform decoupling contract:
 
-- ``wrm_stations_processing_job`` selects the raw station asset in addition
-  to the processed and enhanced assets (regression guard: the raw asset was
-  previously missing from the job selection).
-- A daily schedule named ``daily`` targets that job at 05:00
+- ``wrm_stations_processing_job`` is transform-only: it selects the processed
+  and enhanced assets and must NOT include the raw asset (the raw asset is
+  unpartitioned; including it in this daily-partitioned job tied an API
+  fetch to every scheduled transform tick).
+- ``wrm_stations_ingest_job`` selects the raw station asset only and is
+  unpartitioned. It is registered in the code location's ``Definitions``
+  alongside the processing job (the raw-data sensor still targets the
+  processing job, unchanged).
+- An hourly schedule named ``ingest`` targets the ingest job at minute 0
+  (cron ``0 * * * *``, UTC) and emits a bare ``RunRequest`` with no
+  ``partition_key``: the ingest job is unpartitioned.
+- A daily schedule named ``daily`` targets the processing job at 05:00
   (cron ``0 5 * * *``).
 - Schedule ticks emit a ``RunRequest`` carrying yesterday's (UTC) daily
   ``partition_key``, valid against the job's ``DailyPartitionsDefinition``
@@ -34,7 +42,11 @@ from dagster import (
 from wrm_pipeline.definitions import defs
 
 JOB_NAME = "wrm_stations_processing_job"
+INGEST_JOB_NAME = "wrm_stations_ingest_job"
 SCHEDULE_NAME = "daily"
+INGEST_SCHEDULE_NAME = "ingest"
+# Hourly at minute 0: minute=0, every hour/day-of-month/month/weekday.
+INGEST_CRON = "0 * * * *"
 # 05:00 every day: minute=0, hour=5, every day-of-month/month/weekday.
 DAILY_CRON = "0 5 * * *"
 RAW_NODE = "wrm_stations_raw_data"
@@ -68,28 +80,97 @@ class TestDefinitionsLoad:
         assert Definitions.validate_loadable(defs) is None
 
 
-class TestJobSelectsRawAsset:
-    """wrm_stations_processing_job must include the raw asset node."""
+class TestProcessingJobIsTransformOnly:
+    """wrm_stations_processing_job must exclude the raw asset node (T1-A)."""
 
     def test_job_is_registered(self):
         job = defs.get_job_def(JOB_NAME)
         assert isinstance(job, JobDefinition)
         assert job.name == JOB_NAME
 
-    def test_job_includes_raw_node(self):
-        """Regression guard for the S3 change (jobs/stations.py raw selection)."""
+    def test_job_excludes_raw_node(self):
+        """Ingest/transform decoupling: raw materializes via its own job."""
         job = defs.get_job_def(JOB_NAME)
         node_names = set(job.graph.node_names())
-        assert RAW_NODE in node_names
+        assert RAW_NODE not in node_names
 
     def test_job_nodes_match_expected_selection(self):
-        """Selection is exactly raw + processed + enhanced (no accidental extras)."""
+        """Selection is exactly processed + enhanced (no accidental extras)."""
         job = defs.get_job_def(JOB_NAME)
         assert set(job.graph.node_names()) == {
-            RAW_NODE,
             PROCESSED_NODE,
             ENHANCED_NODE,
         }
+
+
+class TestIngestJobRegistered:
+    """wrm_stations_ingest_job is registered in the code location (T1-A2).
+
+    Resolved through ``defs.get_job_def`` now that the ingest job is
+    registered alongside the processing job; previously these assertions
+    ran against a direct module import while the job was unregistered.
+    """
+
+    def test_ingest_job_is_registered(self):
+        job = defs.get_job_def(INGEST_JOB_NAME)
+        assert isinstance(job, JobDefinition)
+        assert job.name == INGEST_JOB_NAME
+
+    def test_ingest_job_selects_raw_only(self):
+        """Selection is exactly the raw asset (no transform nodes)."""
+        job = defs.get_job_def(INGEST_JOB_NAME)
+        assert set(job.graph.node_names()) == {RAW_NODE}
+
+    def test_ingest_job_is_unpartitioned(self):
+        """The raw asset has no partitions_def, so the ingest job has none."""
+        job = defs.get_job_def(INGEST_JOB_NAME)
+        assert job.partitions_def is None
+
+
+class TestIngestSchedule:
+    """An 'ingest' schedule runs the unpartitioned ingest job hourly (T1-A2)."""
+
+    def _evaluate_tick(self, scheduled_execution_time: datetime | None = None):
+        """Evaluate one 'ingest' schedule tick and return its single RunRequest."""
+        schedule_def = defs.get_schedule_def(INGEST_SCHEDULE_NAME)
+        context = build_schedule_context(
+            repository_def=defs.get_repository_def(),
+            scheduled_execution_time=scheduled_execution_time,
+        )
+        result = schedule_def.evaluate_tick(context)
+        assert len(result.run_requests) == 1
+        return result.run_requests[0]
+
+    def test_schedule_exists_and_is_registered(self):
+        schedule = defs.get_schedule_def(INGEST_SCHEDULE_NAME)
+        assert isinstance(schedule, ScheduleDefinition)
+        assert schedule.name == INGEST_SCHEDULE_NAME
+
+    def test_schedule_cron_is_hourly(self):
+        schedule = defs.get_schedule_def(INGEST_SCHEDULE_NAME)
+        assert schedule.cron_schedule == INGEST_CRON
+
+    def test_schedule_targets_ingest_job(self):
+        schedule = defs.get_schedule_def(INGEST_SCHEDULE_NAME)
+        assert schedule.job_name == INGEST_JOB_NAME
+
+    def test_schedule_runs_in_utc(self):
+        """execution_timezone is pinned to UTC (matches the daily schedule)."""
+        schedule = defs.get_schedule_def(INGEST_SCHEDULE_NAME)
+        assert schedule.execution_timezone == "UTC"
+
+    def test_tick_emits_single_partitionless_request(self):
+        """The ingest job is unpartitioned: no partition_key, no partition tag."""
+        run_request = self._evaluate_tick(
+            datetime(2026, 9, 21, 3, 0, tzinfo=timezone.utc)
+        )
+        assert run_request.partition_key is None
+        assert "dagster/partition" not in run_request.tags
+
+    def test_tick_without_scheduled_time_emits_partitionless_request(self):
+        """Ad-hoc evaluation has no tick time; the tick is still a bare RunRequest."""
+        run_request = self._evaluate_tick()
+        assert run_request.partition_key is None
 
 
 class TestDailySchedule:

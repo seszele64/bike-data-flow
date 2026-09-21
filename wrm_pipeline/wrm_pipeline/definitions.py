@@ -22,7 +22,7 @@ from .resources import (
     hive_partitioned_s3_io_manager
 )
 from .sensors.stations import wrm_stations_raw_data_sensor
-from .jobs.stations import wrm_stations_processing_job
+from .jobs.stations import wrm_stations_ingest_job, wrm_stations_processing_job
 from .vault import vault_secrets_resource
 
 # Load environment variables from .env file in parent directory
@@ -60,10 +60,29 @@ def wrm_stations_daily_schedule(context: ScheduleEvaluationContext) -> RunReques
     return RunRequest(partition_key=partition_key)
 
 
+# Hourly ingest schedule (T1-A2): runs the raw-only, unpartitioned ingest
+# job at minute 0 of every hour (UTC). The ingest job has no partitions_def,
+# so its ticks emit a bare RunRequest without a partition_key — unlike the
+# daily transform schedule above, whose partitioned assets require one.
+INGEST_CRON_SCHEDULE = "0 * * * *"
+
+
+@schedule(
+    job=wrm_stations_ingest_job,
+    name="ingest",
+    cron_schedule=INGEST_CRON_SCHEDULE,
+    execution_timezone="UTC",
+)
+def wrm_stations_ingest_schedule(context: ScheduleEvaluationContext) -> RunRequest:
+    """Fetch the latest raw WRM station snapshot from the API every hour."""
+    return RunRequest()
+
+
 defs = Definitions(
     assets=all_assets,
     jobs=[
         wrm_stations_processing_job,
+        wrm_stations_ingest_job,
     ],
     sensors=[
         wrm_stations_raw_data_sensor,
@@ -97,5 +116,6 @@ defs = Definitions(
     },
     schedules=[
         wrm_stations_daily_schedule,
+        wrm_stations_ingest_schedule,
     ]
 )
