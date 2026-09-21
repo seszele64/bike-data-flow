@@ -6,10 +6,13 @@ its consumers in ``resources.py``:
 * default ``db_path`` is the repo-root ``db/analytics.duckdb`` (never a
   ``~/data`` location),
 * the parent directory of a local path is created on import (``makedirs``),
-* the ``WRM_DUCKDB_PATH`` environment variable overrides the default,
+* the ``WRM_DUCKDB_PATH`` environment variable overrides the default (an
+  empty value falls back to the default),
 * remote URIs (``s3://``, ``gs://``, ``https://``) skip directory creation,
 * the local DuckDB IO managers in ``resources.py`` are wired to
-  ``config.db_path`` while the S3 DuckDB manager keeps its ``s3://`` URI.
+  ``config.db_path`` while the S3 DuckDB manager keeps its ``s3://`` URI,
+* resources.py fail-fasts with ``RuntimeError`` when imported with an empty
+  ``db_path`` (defense-in-depth behind config's empty-value coercion).
 
 ``db_path`` is computed at import time, so override tests reload the config
 module inside :func:`_reloaded_config`, which restores both ``os.environ``
@@ -122,17 +125,23 @@ class TestEnvOverride:
             assert cfg.db_path == "alt/nested/analytics.duckdb"
             assert (tmp_path / "alt" / "nested").is_dir()
 
-    def test_env_override_empty_string_yields_empty_path(self, tmp_path, monkeypatch):
-        """Documents current semantics: an empty value is still an override.
+    def test_env_override_empty_string_falls_back_to_default(self):
+        """Acceptance: an empty ``WRM_DUCKDB_PATH`` is treated as unset.
 
-        ``os.environ.get`` returns ``''`` when the variable is set to empty, so
-        the default is bypassed and db_path becomes ``''``. Flagged in the step
-        report as a design ambiguity (an empty path would be rejected by a real
-        DuckDB IO manager); this test only pins observed behavior.
+        ``os.environ.get`` returns ``''`` when the variable is set to empty,
+        which previously bypassed the default and left ``db_path == ''`` (a
+        path a real DuckDB IO manager would reject). The config coerces an
+        empty value via ``or`` back to the default repo-root location.
         """
-        monkeypatch.chdir(tmp_path)
         with _reloaded_config(env={ENV_VAR: ""}) as cfg:
-            assert cfg.db_path == ""
+            assert cfg.db_path.endswith(DB_SUFFIX)
+            expected = _repo_root() / DB_DIRNAME / DB_FILENAME
+            assert Path(cfg.db_path).resolve() == expected
+
+    def test_env_override_whitespace_only_stays_set(self):
+        """Only ``''`` is coerced; whitespace-only values are honored verbatim."""
+        with _reloaded_config(env={ENV_VAR: "  "}) as cfg:
+            assert cfg.db_path == "  "
 
     @pytest.mark.parametrize(
         "uri",
@@ -220,6 +229,27 @@ class TestResourceWiring:
         finally:
             sys.modules.pop("dagster_duckdb_pandas", None)
             importlib.reload(resources)  # managers back to None in this env
+
+    def test_resources_guard_raises_on_empty_db_path(self, monkeypatch):
+        """Acceptance: resources fail-fasts when db_path is empty at import.
+
+        Defense-in-depth: config coerces an empty ``WRM_DUCKDB_PATH`` back to
+        the default, so the module-level guard in resources.py is normally
+        unreachable. It still protects the by-value import chain — monkeypatch
+        ``config.db_path = ''`` and reload resources: the guard must raise
+        ``RuntimeError`` instead of wiring an IO manager with an empty
+        database path.
+        """
+        original = config.db_path
+        monkeypatch.setattr(config, "db_path", "")
+        try:
+            with pytest.raises(RuntimeError, match="db_path"):
+                importlib.reload(resources)
+        finally:
+            # Restore before reloading: monkeypatch teardown runs after this
+            # finally block, and the restore reload needs the real db_path.
+            config.db_path = original
+            importlib.reload(resources)
 
 
 class TestNoStaleDataPath:

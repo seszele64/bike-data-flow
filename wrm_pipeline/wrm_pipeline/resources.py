@@ -160,7 +160,16 @@ from dagster_aws.s3.io_manager import s3_pickle_io_manager
 
 # DuckDB I/O Manager with S3 integration
 # Local database path comes from config.db_path (repo-root db/analytics.duckdb,
-# overridable via WRM_DUCKDB_PATH); config creates the directory on import.
+# overridable via WRM_DUCKDB_PATH); config creates the directory on import and
+# coerces an empty override back to the default, so the guard below is
+# defense-in-depth: it fail-fasts if db_path ever reaches resources empty,
+# because DuckDBPandasIOManager would reject an empty database path with a far
+# less actionable error than this explicit message.
+if not db_path:
+    raise RuntimeError(
+        "config.db_path is empty; refusing to wire the DuckDB IO managers. "
+        "Set WRM_DUCKDB_PATH to a non-empty path or unset it to use the default."
+    )
 duckdb_io_manager = (
     DuckDBPandasIOManager(
         database=db_path,
