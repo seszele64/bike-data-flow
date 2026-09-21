@@ -15,9 +15,10 @@ dependencies = [
     "minio",
     "pandas",
     "pandera",
+    "pyarrow>=15",
     "python-dotenv",
     "requests",
-    "tenacity>=8.0.0"
+    "tenacity>=8.0.0",
 ]
 
 [dependency-groups]

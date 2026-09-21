@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import ftfy
 from io import StringIO, BytesIO
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing import List
 import pandera as pa
@@ -83,8 +83,8 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
         new_data_hash = hashlib.sha256(fixed_data.encode('utf-8')).hexdigest()
         context.log.info(f"New data hash: {new_data_hash}")
         
-        # Capture current time for file naming
-        current_time = datetime.now()
+        # Capture current time for file naming (UTC for deterministic partitions)
+        current_time = datetime.now(timezone.utc)
         timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S")
         date_partition = current_time.strftime("%Y-%m-%d")
         

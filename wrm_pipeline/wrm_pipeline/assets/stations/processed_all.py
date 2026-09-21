@@ -56,7 +56,7 @@ WRM_STATIONS_ENHANCED_S3_KEY_PATTERN = f"{WRM_STATIONS_S3_PREFIX}enhanced/all/dt
     required_resource_keys={"s3_resource"}
 )
 def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.DataFrame:
-    """Process and validate raw station data into a combined DataFrame"""
+    """Process and validate raw station data into a combined DataFrame persisted to S3 as Parquet"""
     
     # Get S3 client directly from the resource
     s3_client = context.resources.s3_resource
@@ -238,6 +238,30 @@ def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.
             context.log.error(f"Schema failures: {e.failure_cases}")
             raise ValueError(f"DataFrame does not match processed_data_schema: {e}")
         
+        # Use the timestamp from the most recent file for the processed data filename
+        # (mirrors enhanced_all.py: max over per-file timestamps equals
+        # validated_df['file_timestamp'].max() since schema validation either
+        # returns all rows or raises)
+        latest_file_timestamp = max(f['file_timestamp'] for f in processed_files)
+        
+        # Generate S3 key and upload
+        timestamp = latest_file_timestamp.strftime("%Y%m%d_%H%M%S")
+        s3_key = WRM_STATIONS_PROCESSED_S3_KEY_PATTERN.format(partition_date=partition_date, timestamp=timestamp)
+        
+        # Upload to S3
+        buffer = BytesIO()
+        validated_df.to_parquet(buffer, index=False)
+        buffer.seek(0)
+        
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=s3_key,
+            Body=buffer.getvalue(),
+            ContentType='application/octet-stream'
+        )
+        
+        context.log.info(f"Processed data saved to S3: {s3_key}")
+        
         # Add basic metadata
         context.add_output_metadata({
             "columns": list(validated_df.columns),
@@ -246,6 +270,7 @@ def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.
             "partition_date": partition_date,
             "processed_files_count": len(processed_files),
             "processed_files": [f['file_key'] for f in processed_files],
+            "s3_key": s3_key,
             "data_preview": MetadataValue.md(validated_df.head().to_markdown()),
             "schema_validation": "PASSED"
         })

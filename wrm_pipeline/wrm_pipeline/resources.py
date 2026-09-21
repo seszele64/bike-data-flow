@@ -13,7 +13,8 @@ from .config import (
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD,
     S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
     S3_REGION_NAME, BUCKET_NAME, WRM_STATIONS_S3_PREFIX,
-    HETZNER_ENDPOINT_URL, HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY
+    HETZNER_ENDPOINT_URL, HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY,
+    db_path
 )
 
 class MinIOResource(ConfigurableResource):
@@ -157,14 +158,21 @@ except ImportError:
     DuckDBPandasIOManager = None
 from dagster_aws.s3.io_manager import s3_pickle_io_manager
 
-# Ensure the data directory exists
-data_dir = os.path.join(os.path.expanduser("~"), "data")
-os.makedirs(data_dir, exist_ok=True)
-
 # DuckDB I/O Manager with S3 integration
+# Local database path comes from config.db_path (repo-root db/analytics.duckdb,
+# overridable via WRM_DUCKDB_PATH); config creates the directory on import and
+# coerces an empty override back to the default, so the guard below is
+# defense-in-depth: it fail-fasts if db_path ever reaches resources empty,
+# because DuckDBPandasIOManager would reject an empty database path with a far
+# less actionable error than this explicit message.
+if not db_path:
+    raise RuntimeError(
+        "config.db_path is empty; refusing to wire the DuckDB IO managers. "
+        "Set WRM_DUCKDB_PATH to a non-empty path or unset it to use the default."
+    )
 duckdb_io_manager = (
     DuckDBPandasIOManager(
-        database=os.path.join(data_dir, "analytics.duckdb"),
+        database=db_path,
         schema="wrm_analytics"
     )
     if DuckDBPandasIOManager is not None
@@ -191,7 +199,7 @@ duckdb_s3_io_manager = (
 # Local DuckDB with S3 extension for hybrid operations
 duckdb_hybrid_io_manager = (
     DuckDBPandasIOManager(
-        database=os.path.join(data_dir, "analytics.duckdb"),
+        database=db_path,
         schema="wrm_analytics",
         connection_config={
             "s3_region": "auto",

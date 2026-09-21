@@ -1,4 +1,13 @@
-from dagster import Definitions, EnvVar, load_assets_from_modules
+from datetime import datetime, timedelta, timezone
+
+from dagster import (
+    Definitions,
+    EnvVar,
+    RunRequest,
+    ScheduleEvaluationContext,
+    load_assets_from_modules,
+    schedule,
+)
 import os
 from dotenv import load_dotenv
 
@@ -13,7 +22,7 @@ from .resources import (
     hive_partitioned_s3_io_manager
 )
 from .sensors.stations import wrm_stations_raw_data_sensor
-from .jobs.stations import wrm_stations_processing_job
+from .jobs.stations import wrm_stations_ingest_job, wrm_stations_processing_job
 from .vault import vault_secrets_resource
 
 # Load environment variables from .env file in parent directory
@@ -22,10 +31,58 @@ load_dotenv(dotenv_path)
 
 all_assets = load_assets_from_modules([assets])
 
+
+# Daily schedule for the stations processing job (05:00 every day, UTC).
+# Note: build_schedule_from_partitioned_job() derives its cron from the job's
+# DailyPartitionsDefinition and rejects a custom cron_schedule for
+# time-partitioned jobs, so a custom @schedule is used to run at 05:00 and
+# explicitly target the previous day's partition. The RunRequest must carry a
+# partition_key: the job's assets read context.partition_key, which raises on
+# tagless runs (see sensors/stations.py for the event-driven equivalent).
+@schedule(
+    job=wrm_stations_processing_job,
+    name="daily",
+    cron_schedule="0 5 * * *",
+    execution_timezone="UTC",
+)
+def wrm_stations_daily_schedule(context: ScheduleEvaluationContext) -> RunRequest:
+    """Run the stations processing job for yesterday's daily partition."""
+    # dagster 1.13: scheduled_execution_time raises (instead of returning None)
+    # when the context has no tick time (e.g. ad-hoc evaluation); fall back to
+    # the current UTC time.
+    try:
+        scheduled_time = context.scheduled_execution_time
+    except Exception:
+        scheduled_time = datetime.now(timezone.utc)
+    partition_key = (
+        scheduled_time.astimezone(timezone.utc) - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    return RunRequest(partition_key=partition_key)
+
+
+# Hourly ingest schedule (T1-A2): runs the raw-only, unpartitioned ingest
+# job at minute 0 of every hour (UTC). The ingest job has no partitions_def,
+# so its ticks emit a bare RunRequest without a partition_key — unlike the
+# daily transform schedule above, whose partitioned assets require one.
+INGEST_CRON_SCHEDULE = "0 * * * *"
+
+
+@schedule(
+    job=wrm_stations_ingest_job,
+    name="ingest",
+    cron_schedule=INGEST_CRON_SCHEDULE,
+    execution_timezone="UTC",
+)
+def wrm_stations_ingest_schedule(context: ScheduleEvaluationContext) -> RunRequest:
+    """Fetch the latest raw WRM station snapshot from the API every hour."""
+    return RunRequest()
+
+
 defs = Definitions(
     assets=all_assets,
     jobs=[
         wrm_stations_processing_job,
+        wrm_stations_ingest_job,
     ],
     sensors=[
         wrm_stations_raw_data_sensor,
@@ -57,5 +114,8 @@ defs = Definitions(
         # Skip resources backed by integrations that are not installed
         if resource is not None
     },
-    schedules=[]
+    schedules=[
+        wrm_stations_daily_schedule,
+        wrm_stations_ingest_schedule,
+    ]
 )

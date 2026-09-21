@@ -200,4 +200,14 @@ ENV_PATH = dotenv_path
 
 # ================================== duckdb ================================== #
 
-db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'db', 'analytics.duckdb')
+# DuckDB analytics database lives in the repo root db/ directory by default;
+# override with the WRM_DUCKDB_PATH environment variable. An empty value is
+# treated as unset (falls back to the default); any other value, including
+# whitespace-only, is honored verbatim.
+db_path = os.environ.get('WRM_DUCKDB_PATH') or os.path.join(
+    os.path.dirname(__file__), '..', '..', 'db', 'analytics.duckdb'
+)
+
+# Ensure the database directory exists (skip remote URIs such as s3://...).
+if '://' not in db_path:
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)

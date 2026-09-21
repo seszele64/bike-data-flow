@@ -3,9 +3,12 @@ import pandas as pd
 import pandera as pa
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
-from io import StringIO
+from io import StringIO, BytesIO
 from dagster import build_asset_context
-from wrm_pipeline.assets.stations.processed_all import wrm_stations_processed_data_all_asset
+from wrm_pipeline.assets.stations.processed_all import (
+    wrm_stations_processed_data_all_asset,
+    WRM_STATIONS_PROCESSED_S3_KEY_PATTERN,
+)
 from wrm_pipeline.config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 
 
@@ -525,3 +528,129 @@ class TestWRMStationsProcessedDataAllAsset:
             assert len(result) == 3
             assert 'station_id' in result.columns
             assert result['station_id'].tolist() == ['001', '002', '004']
+
+    # =========================================================================
+    # S3 write path (put_object) regression tests for the processed parquet
+    # upload added in S2 (processed_all.py: put_object + s3_key metadata).
+    # =========================================================================
+
+    def _stub_single_file_listing(self, asset_context, sample_raw_data, partition_date='2024-01-15'):
+        """Helper: stub list_objects_v2/get_object for one raw file with a known timestamp."""
+        asset_context.resources.s3_resource.list_objects_v2.return_value = {
+            'Contents': [
+                {
+                    'Key': f"{WRM_STATIONS_S3_PREFIX}raw/dt={partition_date}/wrm_stations_2024-01-15_10-30-45.txt",
+                    'LastModified': datetime(2024, 1, 15, 10, 30, 45)
+                }
+            ]
+        }
+        mock_body = Mock()
+        mock_body.read.return_value = sample_raw_data.encode('utf-8')
+        asset_context.resources.s3_resource.get_object.return_value = {'Body': mock_body}
+
+    def test_put_object_writes_parquet_once_with_s3_key_metadata(self, asset_context, sample_raw_data):
+        """put_object is called exactly once with Bucket/Key pattern, a valid 3-row
+        parquet body, and s3_key metadata equal to the uploaded key (S2 acceptance)."""
+        self._stub_single_file_listing(asset_context, sample_raw_data)
+
+        # Track call order to enforce fail-closed sequencing (write before metadata)
+        order_log = []
+        asset_context.resources.s3_resource.put_object.side_effect = (
+            lambda **kw: (order_log.append('put_object'), None)[1]
+        )
+        mock_add_metadata = Mock()
+        mock_add_metadata.side_effect = (
+            lambda *a, **kw: (order_log.append('add_output_metadata'), None)[1]
+        )
+        asset_context.add_output_metadata = mock_add_metadata
+
+        expected_key = WRM_STATIONS_PROCESSED_S3_KEY_PATTERN.format(
+            partition_date='2024-01-15', timestamp='20240115_103045'
+        )
+
+        with patch('wrm_pipeline.assets.stations.processed_all.processed_data_schema') as mock_schema:
+            mock_schema.validate.side_effect = lambda df: df
+
+            result = wrm_stations_processed_data_all_asset(asset_context)
+
+            # Exactly one S3 write on the happy path
+            assert asset_context.resources.s3_resource.put_object.call_count == 1
+
+            call_kwargs = asset_context.resources.s3_resource.put_object.call_args.kwargs
+            assert call_kwargs['Bucket'] == BUCKET_NAME
+            assert call_kwargs['Key'] == expected_key
+            assert call_kwargs['Key'].endswith('.parquet')
+            assert call_kwargs['ContentType'] == 'application/octet-stream'
+
+            # Body is a valid parquet with the same 3 rows / columns as the returned df
+            roundtrip = pd.read_parquet(BytesIO(call_kwargs['Body']))
+            assert len(roundtrip) == 3
+            assert list(roundtrip.columns) == list(result.columns)
+            assert roundtrip.equals(result.reset_index(drop=True))
+
+            # Metadata advertises the s3_key actually written
+            assert mock_add_metadata.called
+            metadata = mock_add_metadata.call_args[0][0]
+            assert metadata['s3_key'] == expected_key
+            assert metadata['total_records'] == 3
+
+            # Fail-closed ordering: S3 write happens BEFORE success metadata is published
+            assert order_log == ['put_object', 'add_output_metadata']
+
+    def test_put_object_key_uses_latest_file_timestamp(self, asset_context, multiple_raw_files_data):
+        """The uploaded Key timestamp is the LATEST raw file timestamp (mirrors enhanced_all)."""
+        asset_context.resources.s3_resource.list_objects_v2.return_value = {
+            'Contents': [
+                {'Key': fd['key'], 'LastModified': fd['last_modified']}
+                for fd in multiple_raw_files_data
+            ]
+        }
+
+        def mock_get_object(Bucket, Key):
+            for fd in multiple_raw_files_data:
+                if fd['key'] == Key:
+                    mock_body = Mock()
+                    mock_body.read.return_value = fd['data'].encode('utf-8')
+                    return {'Body': mock_body}
+            raise KeyError(f"Key {Key} not found")
+
+        asset_context.resources.s3_resource.get_object.side_effect = mock_get_object
+        asset_context.add_output_metadata = Mock()
+
+        expected_key = WRM_STATIONS_PROCESSED_S3_KEY_PATTERN.format(
+            partition_date='2024-01-15', timestamp='20240115_111530'  # latest: 11:15:30
+        )
+
+        with patch('wrm_pipeline.assets.stations.processed_all.processed_data_schema') as mock_schema:
+            mock_schema.validate.side_effect = lambda df: df
+
+            result = wrm_stations_processed_data_all_asset(asset_context)
+
+            assert asset_context.resources.s3_resource.put_object.call_count == 1
+            call_kwargs = asset_context.resources.s3_resource.put_object.call_args.kwargs
+            assert call_kwargs['Key'] == expected_key
+
+            metadata = asset_context.add_output_metadata.call_args[0][0]
+            assert metadata['s3_key'] == expected_key
+
+    def test_put_object_failure_is_fail_closed(self, asset_context, sample_raw_data):
+        """If the S3 write fails, the exception propagates and NO success metadata
+        is published (fail-closed: no phantom materialization)."""
+        self._stub_single_file_listing(asset_context, sample_raw_data)
+
+        asset_context.resources.s3_resource.put_object.side_effect = Exception(
+            "S3 write failed: access denied"
+        )
+        mock_add_metadata = Mock()
+        asset_context.add_output_metadata = mock_add_metadata
+
+        with patch('wrm_pipeline.assets.stations.processed_all.processed_data_schema') as mock_schema:
+            mock_schema.validate.side_effect = lambda df: df
+
+            with pytest.raises(Exception, match="S3 write failed: access denied"):
+                wrm_stations_processed_data_all_asset(asset_context)
+
+            # Write was attempted exactly once, then failed
+            assert asset_context.resources.s3_resource.put_object.call_count == 1
+            # No metadata published for a failed write
+            assert not mock_add_metadata.called
