@@ -19,6 +19,10 @@ kept verbatim (frontmatter ``title`` exact, body names both snapshot
 tables, single page); the B3 query/table/chart contract is asserted by the
 ``TestIndexRealPageContract`` class below.
 
+B4.2 evolution: ``evidence.config.yaml`` now registers the
+``@evidence-dev/duckdb`` datasource plugin (``plugins.datasources`` is
+``{"@evidence-dev/duckdb": {}}``); ``plugins.components`` stays ``{}``.
+
 Both files must also be tracked in git — the dashboard is source-controlled
 except for the ignored Node/SvelteKit build artifacts.
 
@@ -93,8 +97,8 @@ class TestEvidenceConfigStub:
         assert PROJECT_NAME == package_name
 
     def test_plugins_sections_are_empty_stubs(self, config: dict):
-        """`evidence build` must run with no datasources until S9.x wires wrm/."""
-        assert config["plugins"] == {"components": {}, "datasources": {}}
+        """B4.2: components stay empty; datasources registers @evidence-dev/duckdb."""
+        assert config["plugins"] == {"components": {}, "datasources": {"@evidence-dev/duckdb": {}}}
 
     def test_stub_locks_exact_top_level_keys(self, config: dict):
         assert set(config) == {"project", "plugins"}

@@ -34,11 +34,13 @@ convention):
 
 Known gap (S9.2, by design — documented in the yaml header)
 -----------------------------------------------------------
-``@evidence-dev/duckdb`` is NOT installed and ``evidence.config.yaml``
-declares ``plugins.datasources: {}``. Step 5 therefore cannot resolve
-``type: duckdb`` yet and live ``evidence sources`` discovery is deferred to
-a later S9.x step. These tests (a) assert every static precondition so the
-``connection.yaml`` itself will NOT be skipped or rejected at load time,
+B4.2 update: ``evidence.config.yaml`` now declares
+``plugins.datasources: {"@evidence-dev/duckdb": {}}`` (config seam closed),
+but ``@evidence-dev/duckdb`` is still NOT installed under
+``dashboard/node_modules`` (install seam open), so the registry is still
+empty and live ``evidence sources`` discovery stays deferred. These tests
+(a) assert every static precondition so the ``connection.yaml`` itself will
+NOT be skipped or rejected at load time,
 (b) lock the gap state so the deferral stays machine-checked rather than
 accidental, and (c) upgrade automatically to a live, hermetic discovery run
 (``SEND_ANONYMOUS_USAGE_STATS=false``, no network needed) as soon as the
@@ -417,11 +419,12 @@ class TestSpecSchemaEdgeCases:
 # Plugin registry: the documented S9.2 gap (machine-checked, not assumed).
 # --------------------------------------------------------------------------- #
 class TestPluginRegistryGap:
-    """Step 4/5 of the discovery chain — the known, documented gap."""
+    """Step 4/5 of the discovery chain — B4.2 partial gap (config registered, install pending)."""
 
     def test_evidence_config_declares_no_datasources(self):
+        """B4.2: evidence.config.yaml registers @evidence-dev/duckdb for wrm/."""
         config = _read_yaml(EVIDENCE_CONFIG)
-        assert (config.get("plugins") or {}).get("datasources") == {}
+        assert (config.get("plugins") or {}).get("datasources") == {"@evidence-dev/duckdb": {}}
 
     def test_duckdb_plugin_not_installed(self):
         assert not _duckdb_plugin_installed()
@@ -451,11 +454,12 @@ class TestPluginRegistryGap:
         registered = _registered_source_types()
         if not registered and not _duckdb_plugin_installed():
             pytest.skip(
-                "S9.2 known gap (documented): @evidence-dev/duckdb is not "
-                "installed and evidence.config.yaml plugins.datasources is "
-                "empty, so `evidence sources` cannot resolve type 'duckdb' "
+                "B4.2 partial gap (documented): evidence.config.yaml registers "
+                "@evidence-dev/duckdb but it is not installed under "
+                "dashboard/node_modules so the registry is empty and "
+                "`evidence sources` cannot resolve type 'duckdb' "
                 "yet — live discovery is deferred to a later S9.x step. "
-                "This test auto-upgrades once the plugin is registered."
+                "This test auto-upgrades once the plugin is installed."
             )
         assert EXPECTED_TYPE in registered
 
@@ -478,9 +482,10 @@ class TestLiveDiscovery:
         registered = _registered_source_types()
         if not registered and not _duckdb_plugin_installed():
             pytest.skip(
-                "S9.2 known gap (documented): @evidence-dev/duckdb is not "
-                "installed and evidence.config.yaml plugins.datasources is "
-                "empty — `evidence sources` would raise 'Could not find "
+                "B4.2 partial gap (documented): evidence.config.yaml registers "
+                "@evidence-dev/duckdb but it is not installed under "
+                "dashboard/node_modules so the registry is empty — "
+                "`evidence sources` would raise 'Could not find "
                 "matching datasource plugin for wrm (source: duckdb)'. "
                 "Live discovery is deferred to a later S9.x step."
             )
