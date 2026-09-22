@@ -4,9 +4,8 @@ title: Bike Data Flow Dashboard
 
 # Bike Data Flow Dashboard
 
-> **Empty state:** No data yet — snapshot tables are empty (0 rows). Run the `wrm`
-> sources and the `evidence_data_snapshot` pipeline asset to populate
-> `stations_latest` and `density_grid`.
+> **Live data:** rendered from the current `wrm.stations_latest` and
+> `wrm.density_grid` snapshots.
 
 ## Stations
 
@@ -29,7 +28,7 @@ ORDER BY timestamp DESC, name
 
 ### Bikes per station
 
-<BarChart data={stations} x="name" y="bikes" swapXY={true} />
+<BarChart data={stations} x="name" y="bikes" />
 
 ### Bikes over time
 
@@ -52,4 +51,4 @@ ORDER BY density_per_1000m2 DESC, grid_lat, grid_lon
 
 ### Density per 1000 m² grid cell
 
-<BarChart data={density} x="grid_lat" y="density_per_1000m2" swapXY={true} />
+<BarChart data={density} x="grid_lat" y="density_per_1000m2" />
