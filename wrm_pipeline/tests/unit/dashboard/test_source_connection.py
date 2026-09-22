@@ -502,11 +502,15 @@ class TestLiveDiscovery:
         npm = shutil.which("npm")
         if npm is None:
             pytest.skip("npm not available; cannot run live Evidence discovery")
+        from wrm_pipeline.assets import dashboard as dashboard_module
+
         registered = _registered_source_types()
         assert _duckdb_plugin_installed(), "B4.3 requires the duckdb plugin installed"
         assert EXPECTED_TYPE in registered
 
-        env = dict(os.environ, SEND_ANONYMOUS_USAGE_STATS="false")
+        # S3/A1 F3: reuse the prod credential-free env filter (strips
+        # HETZNER_*/S3_*) instead of passing full os.environ to the child.
+        env = dict(dashboard_module._build_env(), SEND_ANONYMOUS_USAGE_STATS="false")
         result = subprocess.run(
             [npm, "run", "sources", "--", "--sources", EXPECTED_NAME],
             cwd=DASHBOARD_DIR,
