@@ -6,7 +6,10 @@ project:
   name: bike-data-dashboard
 
 plugins:
-  components: {}
+  components:
+    # Key is the npm package name (quoted, starts with @); provides the core
+    # component library (incl. QueryViewer) used by dashboard pages.
+    "@evidence-dev/core-components": {}
   datasources:
     # Key is the npm package name (loadSourcePlugins resolves keys from
     # node_modules); provides the `duckdb` type used by sources/wrm/.
