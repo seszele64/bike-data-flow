@@ -1,0 +1,16 @@
+# Bike Data Flow — Evidence project configuration (S6.2 stub).
+# Minimal config so `evidence dev` / `evidence build` run offline with empty data.
+# Real datasources, queries and charts land in later steps (S9.x owns sources/wrm/).
+
+project:
+  name: bike-data-dashboard
+
+plugins:
+  components:
+    # Key is the npm package name (quoted, starts with @); provides the core
+    # component library (incl. QueryViewer) used by dashboard pages.
+    "@evidence-dev/core-components": {}
+  datasources:
+    # Key is the npm package name (loadSourcePlugins resolves keys from
+    # node_modules); provides the `duckdb` type used by sources/wrm/.
+    "@evidence-dev/duckdb": {}
