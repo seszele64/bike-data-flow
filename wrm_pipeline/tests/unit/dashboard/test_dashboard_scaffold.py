@@ -224,7 +224,13 @@ class TestSnapshotStubArtifact:
             ]
         finally:
             conn.close()
-        assert described == STUB_STATIONS_COLUMNS
+        # Live duckdb 1.5.5 reports the timestamp column as TIMESTAMP_NS;
+        # normalize so the TIMESTAMP contract in STUB_STATIONS_COLUMNS holds.
+        normalized = [
+            (name, "TIMESTAMP" if dtype == "TIMESTAMP_NS" else dtype)
+            for name, dtype in described
+        ]
+        assert normalized == STUB_STATIONS_COLUMNS
 
     def test_stub_density_grid_schema(self, snapshot_path):
         conn = duckdb.connect(snapshot_path, read_only=True)
