@@ -14,6 +14,7 @@
   "devDependencies": {
     "@evidence-dev/duckdb": "^2.0.1",
     "@evidence-dev/evidence": "^40.1.8",
+    "@evidence-dev/tailwind": "^3.1.4",
     "typescript": "^5.0.0"
   }
 }
