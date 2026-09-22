@@ -42,3 +42,8 @@ dagster_home
 *.swo
 *~
 .DS_Store
+
+# Evidence dashboard (Node/SvelteKit build artifacts)
+dashboard/node_modules/
+dashboard/.svelte-kit/
+dashboard/.evidence/

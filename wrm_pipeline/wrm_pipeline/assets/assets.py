@@ -18,6 +18,9 @@ from .duckdb import (
     bike_density_map
 )
 
+# Dashboard snapshot asset
+from .dashboard import evidence_data_snapshot
+
 # Re-export all assets
 __all__ = [
     # Station assets
@@ -28,5 +31,7 @@ __all__ = [
     "create_duckdb_enhanced_views",
     "query_station_summary",
     "bike_density_spatial_analysis",
-    "bike_density_map"
+    "bike_density_map",
+    # Dashboard snapshot
+    "evidence_data_snapshot"
 ]
