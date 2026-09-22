@@ -136,7 +136,7 @@ def _validate_spec(raw: object) -> dict:
     if "name" not in raw:
         raise SpecValidationError("name is required")
     name = raw["name"]
-    if not isinstance(name, str) or not SPEC_NAME_PATTERN.match(name):
+    if not isinstance(name, str) or not SPEC_NAME_PATTERN.fullmatch(name):
         raise SpecValidationError(f"name must match {SPEC_NAME_PATTERN.pattern!r}")
 
     normalized: dict = {"type": raw["type"], "name": name}
@@ -230,7 +230,7 @@ class TestConnectionYamlArtifact:
         }
 
     def test_name_satisfies_schema_pattern(self, spec_raw: dict):
-        assert SPEC_NAME_PATTERN.match(spec_raw["name"])
+        assert SPEC_NAME_PATTERN.fullmatch(spec_raw["name"])
 
     def test_type_is_duckdb(self, spec_raw: dict):
         assert spec_raw["type"] == EXPECTED_TYPE
@@ -353,7 +353,7 @@ class TestSpecSchemaEdgeCases:
 
     @pytest.mark.parametrize(
         "name",
-        ["", "wr m", "wrm.dash", "wrm/dash", "wrm!", "wrm🚲", "-ok dash but.dot has space"],
+        ["", "wr m", "wrm.dash", "wrm/dash", "wrm!", "wrm🚲", "wrm\n", "-ok dash but.dot has space"],
     )
     def test_name_pattern_rejects(self, name: str):
         with pytest.raises(SpecValidationError):
