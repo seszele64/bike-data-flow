@@ -11,6 +11,14 @@ Locks the recorded artifacts added in commit ``7a52e37``:
   (``stations_latest`` / ``density_grid``) so the copy stays consistent with
   the recorded DuckDB stub locked in ``test_dashboard_scaffold.py``.
 
+B3 evolution (commit ``1418a7a``): the index page grew from stub copy into
+the real stations page — `````sql stations`` / `````sql density`` queries
+against ``wrm.stations_latest`` / ``wrm.density_grid`` plus ``DataTable`` /
+``BarChart`` / ``LineChart`` components. The S6.2 locks that still hold are
+kept verbatim (frontmatter ``title`` exact, body names both snapshot
+tables, single page); the B3 query/table/chart contract is asserted by the
+``TestIndexRealPageContract`` class below.
+
 Both files must also be tracked in git — the dashboard is source-controlled
 except for the ignored Node/SvelteKit build artifacts.
 
@@ -99,7 +107,7 @@ class TestEvidenceConfigStub:
 
 
 class TestSiteIndexPage:
-    """dashboard/pages/index.md: the single S6.2 stub page."""
+    """dashboard/pages/index.md: stub-era locks (kept) + B3 real-page base."""
 
     @pytest.fixture
     def index_text(self) -> str:
@@ -134,9 +142,146 @@ class TestSiteIndexPage:
         assert "density_grid" in body
 
     def test_index_is_only_page_at_stub_stage(self):
-        """S6.2 ships exactly one page; later steps must update this lock."""
+        """B3 keeps exactly one page (index.md); later steps update this lock."""
         entries = sorted(os.listdir(PAGES_DIR))
         assert entries == ["index.md"]
+
+
+# The B3 real-page column contract mirrors the snapshot schema locked in
+# wrm_pipeline/assets/dashboard.py (_STATIONS_SNAPSHOT_SQL 9 cols /
+# _DENSITY_SNAPSHOT_SQL 5 cols) and asserted at runtime by
+# test_evidence_data_snapshot.py — this class locks that the *page queries*
+# project exactly those columns.
+B3_STATIONS_COLUMNS = [
+    "station_id",
+    "name",
+    "bikes",
+    "spaces",
+    "total_docks",
+    "installed",
+    "lat",
+    "lon",
+    "timestamp",
+]
+
+B3_DENSITY_COLUMNS = [
+    "grid_lat",
+    "grid_lon",
+    "bike_count",
+    "station_count",
+    "density_per_1000m2",
+]
+
+
+def _sql_block(index_text: str, name: str) -> str:
+    """Return the body of the ```sql <name> fenced block (raises if absent)."""
+    pattern = re.compile(r"```sql\s+" + re.escape(name) + r"\b(.*?)(```)", re.DOTALL)
+    match = pattern.search(index_text)
+    assert match is not None, f"missing ```sql {name} block"
+    return match.group(1)
+
+
+class TestIndexRealPageContract:
+    """dashboard/pages/index.md: the B3 real stations page (commit 1418a7a).
+
+    Pure-text assertions (no Node / no live ``evidence build``): the page
+    must expose the two snapshot queries under the ``wrm.<table>`` source
+    qualifier with the exact snapshot-schema projections, and every
+    ``DataTable`` / chart component must bind to a defined query name.
+    """
+
+    @pytest.fixture
+    def index_text(self) -> str:
+        with open(INDEX_PATH, encoding="utf-8") as fh:
+            return fh.read()
+
+    # -- query blocks ------------------------------------------------------
+    def test_stations_query_block_exists(self, index_text: str):
+        assert "```sql stations" in index_text
+
+    def test_density_query_block_exists(self, index_text: str):
+        assert "```sql density" in index_text
+
+    def test_exactly_two_sql_blocks(self, index_text: str):
+        assert len(re.findall(r"```sql\s+\w+", index_text)) == 2
+
+    def test_stations_query_reads_wrm_snapshot_table(self, index_text: str):
+        block = _sql_block(index_text, "stations")
+        assert "wrm.stations_latest" in block
+
+    def test_density_query_reads_wrm_snapshot_table(self, index_text: str):
+        block = _sql_block(index_text, "density")
+        assert "wrm.density_grid" in block
+
+    def test_stations_query_projects_full_snapshot_schema(self, index_text: str):
+        """The 9 stations_latest cols (dashboard.py:35-39) must be selected."""
+        block = _sql_block(index_text, "stations")
+        lowered = block.lower()
+        for column in B3_STATIONS_COLUMNS:
+            assert re.search(r"\b" + re.escape(column) + r"\b", lowered), (
+                f"stations query missing column {column!r}"
+            )
+        assert "select" in lowered
+        assert "from" in lowered
+
+    def test_density_query_projects_full_snapshot_schema(self, index_text: str):
+        """The 5 density_grid cols (dashboard.py:43-69) must be selected."""
+        block = _sql_block(index_text, "density")
+        lowered = block.lower()
+        for column in B3_DENSITY_COLUMNS:
+            assert re.search(r"\b" + re.escape(column) + r"\b", lowered), (
+                f"density query missing column {column!r}"
+            )
+        assert "select" in lowered
+        assert "from" in lowered
+
+    def test_queries_have_deterministic_order_by(self, index_text: str):
+        assert "ORDER BY" in _sql_block(index_text, "stations")
+        assert "ORDER BY" in _sql_block(index_text, "density")
+
+    # -- components ----------------------------------------------------------
+    def test_datatable_bound_to_each_query(self, index_text: str):
+        assert "<DataTable data={stations}" in index_text
+        assert "<DataTable data={density}" in index_text
+
+    def test_stations_charts(self, index_text: str):
+        """BarChart (bikes per station) + LineChart (bikes over time)."""
+        assert re.search(r"<BarChart\s+data=\{stations\}[^>]*x=\{name\}[^>]*y=\{bikes\}", index_text)
+        assert re.search(
+            r"<LineChart\s+data=\{stations\}[^>]*x=\{timestamp\}[^>]*y=\{bikes\}", index_text
+        )
+
+    def test_density_chart(self, index_text: str):
+        assert re.search(
+            r"<BarChart\s+data=\{density\}[^>]*x=\{grid_lat\}[^>]*y=\{density_per_1000m2\}",
+            index_text,
+        )
+
+    def test_component_data_refs_match_defined_queries(self, index_text: str):
+        """Every data={name} must refer to a ```sql <name> block (no dangling)."""
+        defined = set(re.findall(r"```sql\s+(\w+)", index_text))
+        used = set(re.findall(r"data=\{(\w+)\}", index_text))
+        assert used, "expected at least one data={...} component binding"
+        assert used <= defined, f"dangling component refs: {used - defined}"
+
+    # -- page structure ------------------------------------------------------
+    def test_section_headings(self, index_text: str):
+        body = index_text.split("---", 2)[2]
+        assert "## Stations" in body
+        assert "## Spatial density" in body
+
+    def test_empty_state_names_snapshot_tables(self, index_text: str):
+        """B3 keeps the 0-row empty-state note naming both snapshot tables."""
+        body = index_text.split("---", 2)[2]
+        assert "No data yet" in body
+        assert "stations_latest" in body
+        assert "density_grid" in body
+
+    def test_page_is_credential_free(self, index_text: str):
+        assert SECRET_PATTERN.search(index_text) is None
+
+    def test_page_has_no_local_or_absolute_paths(self, index_text: str):
+        assert LOCAL_PATH_PATTERN.search(index_text) is None
 
 
 class TestS62ArtifactsTracked:
