@@ -283,12 +283,13 @@ class TestIndexRealPageContract:
         assert "## Stations" in body
         assert "## Spatial density" in body
 
-    def test_empty_state_names_snapshot_tables(self, index_text: str):
-        """B3 keeps the 0-row empty-state note naming both snapshot tables."""
+    def test_live_header_names_snapshot_tables(self, index_text: str):
+        """P10 live-data header replaces the 0-row empty-state note; it must
+        still name both wrm. snapshot tables."""
         body = index_text.split("---", 2)[2]
-        assert "No data yet" in body
-        assert "stations_latest" in body
-        assert "density_grid" in body
+        assert "Live data" in body
+        assert "wrm.stations_latest" in body
+        assert "wrm.density_grid" in body
 
     def test_page_is_credential_free(self, index_text: str):
         assert SECRET_PATTERN.search(index_text) is None
