@@ -19,7 +19,7 @@ from .duckdb import (
 )
 
 # Dashboard snapshot assets
-from .dashboard import evidence_data_snapshot, evidence_build
+from .dashboard import evidence_data_snapshot, evidence_build, evidence_deploy
 
 # Re-export all assets
 __all__ = [
@@ -35,4 +35,5 @@ __all__ = [
     # Dashboard snapshots
     "evidence_data_snapshot",
     "evidence_build",
+    "evidence_deploy",
 ]
