@@ -32,20 +32,23 @@ convention):
    throws ``EvidenceError("Could not find matching datasource plugin for
    <name> (source: <type>)")`` when nothing provides it.
 
-Known gap (S9.2, by design — documented in the yaml header)
------------------------------------------------------------
-B4.2 update: ``evidence.config.yaml`` now declares
-``plugins.datasources: {"@evidence-dev/duckdb": {}}`` (config seam closed),
-but ``@evidence-dev/duckdb`` is still NOT installed under
-``dashboard/node_modules`` (install seam open), so the registry is still
-empty and live ``evidence sources`` discovery stays deferred. These tests
-(a) assert every static precondition so the ``connection.yaml`` itself will
-NOT be skipped or rejected at load time,
-(b) lock the gap state so the deferral stays machine-checked rather than
-accidental, and (c) upgrade automatically to a live, hermetic discovery run
-(``SEND_ANONYMOUS_USAGE_STATS=false``, no network needed) as soon as the
-plugin is registered — the acceptance criterion "discovery not-skipped
-asserted OR documented skip due to missing plugin".
+Installed state (S9.2 + B4.3 — gap closed, was deferred by design)
+------------------------------------------------------------------
+B4.2 closed the config seam: ``evidence.config.yaml`` declares
+``plugins.datasources: {"@evidence-dev/duckdb": {}}``.
+B4.3 closed the install seam: ``npm install`` installed
+``@evidence-dev/duckdb@2.0.1`` under ``dashboard/node_modules`` (locked in
+``dashboard/package-lock.json`` as ``node_modules/@evidence-dev/duckdb`` and
+in ``dashboard/package.json`` devDependencies alongside
+``@evidence-dev/evidence`` and ``typescript``), so the registry now provides
+``duckdb`` and live ``evidence sources`` discovery runs hermetically.
+These tests (a) assert every static precondition so the
+``connection.yaml`` itself is NOT skipped or rejected at load time,
+(b) lock the installed state so the closure stays machine-checked rather
+than accidental, and (c) run a live, hermetic discovery run
+(``SEND_ANONYMOUS_USAGE_STATS=false``, no network needed) — the acceptance
+criterion "discovery not-skipped asserted" (the old "OR documented skip
+due to missing plugin" arm is retired now the plugin is installed).
 
 Test strategy
 -------------
@@ -416,79 +419,72 @@ class TestSpecSchemaEdgeCases:
 
 
 # --------------------------------------------------------------------------- #
-# Plugin registry: the documented S9.2 gap (machine-checked, not assumed).
+# Plugin registry: B4.3 installed state (machine-checked, not assumed).
 # --------------------------------------------------------------------------- #
-class TestPluginRegistryGap:
-    """Step 4/5 of the discovery chain — B4.2 partial gap (config registered, install pending)."""
+class TestPluginRegistryInstalled:
+    """Step 4/5 of the discovery chain — B4.3 gap closed (config + install)."""
 
-    def test_evidence_config_declares_no_datasources(self):
-        """B4.2: evidence.config.yaml registers @evidence-dev/duckdb for wrm/."""
+    def test_evidence_config_declares_duckdb_datasource(self):
+        """B4.2+: evidence.config.yaml registers @evidence-dev/duckdb for wrm/."""
         config = _read_yaml(EVIDENCE_CONFIG)
         assert (config.get("plugins") or {}).get("datasources") == {"@evidence-dev/duckdb": {}}
 
-    def test_duckdb_plugin_not_installed(self):
-        assert not _duckdb_plugin_installed()
+    def test_duckdb_plugin_installed(self):
+        """B4.3: @evidence-dev/duckdb is installed (tree AND lockfile seams)."""
+        assert _duckdb_plugin_installed()
+        # Both seams closed: on-disk tree (loadPluginPackage resolves it) and
+        # lockfile entry (regen'd by B4.3 npm install).
+        assert os.path.isdir(
+            os.path.join(DASHBOARD_DIR, "node_modules", "@evidence-dev", "duckdb")
+        )
+        with open(os.path.join(DASHBOARD_DIR, "package-lock.json")) as fh:
+            lockfile = json.load(fh)
+        assert "node_modules/@evidence-dev/duckdb" in lockfile.get("packages", {})
 
-    def test_registry_provides_no_types(self):
-        assert _registered_source_types() == set()
+    def test_registry_provides_duckdb_type(self):
+        """The registered plugin provides the `duckdb` source type."""
+        assert EXPECTED_TYPE in _registered_source_types()
 
-    def test_discovery_gap_state_is_self_consistent(self):
-        """Registry empty ⟺ plugin uninstalled: the skip can't be half-open."""
+    def test_discovery_state_is_self_consistent(self):
+        """Registry provides duckdb AND plugin installed: the chain can't be half-open."""
         registered = _registered_source_types()
         installed = _duckdb_plugin_installed()
-        assert registered == set() or installed, (
-            "A registered-but-unresolvable plugin key is silently skipped by "
-            "loadSourcePlugins; a bare install without a config key is "
-            "invisible to discovery. Keep the two states aligned."
+        assert installed, "B4.3 requires @evidence-dev/duckdb to be installed"
+        assert EXPECTED_TYPE in registered, (
+            "loadSourcePlugins resolves the config key from node_modules; "
+            "an installed plugin with a config key must register its type."
         )
 
-    def test_discovery_gap_is_documented_and_gated(self):
-        """Acceptance gate: discovery is asserted live once the gap closes.
+    def test_discovery_gap_closed_resolves_duckdb(self):
+        """Acceptance gate (first arm): `type: duckdb` resolves — no skip.
 
-        While the gap exists (plugin absent AND registry empty) the deferral
-        is a *documented, machine-checked* skip — exactly the acceptance
-        criterion's second arm. The moment the plugin is registered, this
-        test hard-asserts that `type: duckdb` resolves (first arm) and the
-        live CLI test in TestLiveDiscovery starts executing.
+        B4.3 retired the documented-skip arm: the plugin is installed and the
+        registry is non-empty, so this hard-asserts resolution and the live
+        CLI test in TestLiveDiscovery always executes (npm-gated only).
         """
         registered = _registered_source_types()
-        if not registered and not _duckdb_plugin_installed():
-            pytest.skip(
-                "B4.2 partial gap (documented): evidence.config.yaml registers "
-                "@evidence-dev/duckdb but it is not installed under "
-                "dashboard/node_modules so the registry is empty and "
-                "`evidence sources` cannot resolve type 'duckdb' "
-                "yet — live discovery is deferred to a later S9.x step. "
-                "This test auto-upgrades once the plugin is installed."
-            )
+        assert _duckdb_plugin_installed()
         assert EXPECTED_TYPE in registered
 
 
 # --------------------------------------------------------------------------- #
-# Live discovery (only fires when the plugin gap is closed).
+# Live discovery (always runs now the plugin gap is closed).
 # --------------------------------------------------------------------------- #
 class TestLiveDiscovery:
     """`evidence sources` resolves wrm without the loader/plugin skips."""
 
     def test_evidence_sources_processes_wrm(self):
-        """Run real discovery once @evidence-dev/duckdb is registered.
+        """Run real discovery with @evidence-dev/duckdb registered.
 
-        Skipped while the plugin is missing (documented gap above). When it
-        runs: hermetic (SEND_ANONYMOUS_USAGE_STATS=false, no network), and
+        B4.3: hermetic (SEND_ANONYMOUS_USAGE_STATS=false, no network), and
         asserts the source is *processed* — not loader-skipped, not
         plugin-not-found, exit 0. Zero .sql stubs exist at S9.2, so a clean
         run discovers the source with an empty dataset manifest.
+        Only npm-availability may skip this test.
         """
         registered = _registered_source_types()
-        if not registered and not _duckdb_plugin_installed():
-            pytest.skip(
-                "B4.2 partial gap (documented): evidence.config.yaml registers "
-                "@evidence-dev/duckdb but it is not installed under "
-                "dashboard/node_modules so the registry is empty — "
-                "`evidence sources` would raise 'Could not find "
-                "matching datasource plugin for wrm (source: duckdb)'. "
-                "Live discovery is deferred to a later S9.x step."
-            )
+        assert _duckdb_plugin_installed(), "B4.3 requires the duckdb plugin installed"
+        assert EXPECTED_TYPE in registered
         npm = shutil.which("npm")
         if npm is None:
             pytest.skip("npm not available; cannot run live Evidence discovery")
