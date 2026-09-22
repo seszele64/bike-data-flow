@@ -29,11 +29,11 @@ ORDER BY timestamp DESC, name
 
 ### Bikes per station
 
-<BarChart data={stations} x={name} y={bikes} swapXY=true />
+<BarChart data={stations} x="name" y="bikes" swapXY={true} />
 
 ### Bikes over time
 
-<LineChart data={stations} x={timestamp} y={bikes} />
+<LineChart data={stations} x="timestamp" y="bikes" />
 
 ## Spatial density
 
@@ -52,4 +52,4 @@ ORDER BY density_per_1000m2 DESC, grid_lat, grid_lon
 
 ### Density per 1000 m² grid cell
 
-<BarChart data={density} x={grid_lat} y={density_per_1000m2} swapXY=true />
+<BarChart data={density} x="grid_lat" y="density_per_1000m2" swapXY={true} />
