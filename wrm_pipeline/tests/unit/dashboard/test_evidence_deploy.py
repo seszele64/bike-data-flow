@@ -159,6 +159,15 @@ class TestDeployPaths:
     def _reload_with_env(self, monkeypatch, env: dict) -> object:
         for var in ("WRM_DASHBOARD_DIR", "WRM_DASHBOARD_BUILD_DIR"):
             monkeypatch.delenv(var, raising=False)
+        # Snapshot the path attrs *before* the reload: reload() rebinds them
+        # while the patched env is live, so a post-test reload would still see
+        # that env and freeze the tmp_path-derived values (stale state leaking
+        # past monkeypatch teardown). setattr records the pre-test values and
+        # restores them at teardown, after the env vars are undone.
+        for attr in ("DASHBOARD_DIR", "BUILD_DIR"):
+            monkeypatch.setattr(
+                dashboard_module, attr, getattr(dashboard_module, attr)
+            )
         for k, v in env.items():
             monkeypatch.setenv(k, v)
         return importlib.reload(dashboard_module)
@@ -168,19 +177,13 @@ class TestDeployPaths:
         mod = self._reload_with_env(
             monkeypatch, {"WRM_DASHBOARD_BUILD_DIR": custom}
         )
-        try:
-            assert mod.BUILD_DIR == custom
-        finally:
-            importlib.reload(dashboard_module)
+        assert mod.BUILD_DIR == custom
 
     def test_dashboard_dir_override_cascades_to_build(self, monkeypatch, tmp_path):
         custom = str(tmp_path / "custom-dash")
         mod = self._reload_with_env(monkeypatch, {"WRM_DASHBOARD_DIR": custom})
-        try:
-            assert mod.DASHBOARD_DIR == custom
-            assert mod.BUILD_DIR == os.path.join(custom, "build")
-        finally:
-            importlib.reload(dashboard_module)
+        assert mod.DASHBOARD_DIR == custom
+        assert mod.BUILD_DIR == os.path.join(custom, "build")
 
     def test_both_overrides_independent(self, monkeypatch, tmp_path):
         dash = str(tmp_path / "d")
@@ -189,22 +192,16 @@ class TestDeployPaths:
             monkeypatch,
             {"WRM_DASHBOARD_DIR": dash, "WRM_DASHBOARD_BUILD_DIR": out},
         )
-        try:
-            assert mod.DASHBOARD_DIR == dash
-            assert mod.BUILD_DIR == out
-        finally:
-            importlib.reload(dashboard_module)
+        assert mod.DASHBOARD_DIR == dash
+        assert mod.BUILD_DIR == out
 
     def test_empty_string_env_falls_back_to_default(self, monkeypatch):
         mod = self._reload_with_env(
             monkeypatch,
             {"WRM_DASHBOARD_DIR": "", "WRM_DASHBOARD_BUILD_DIR": ""},
         )
-        try:
-            assert mod.BUILD_DIR == os.path.join(mod.DASHBOARD_DIR, "build")
-            assert mod.DASHBOARD_DIR == os.path.join(_repo_root(), "dashboard")
-        finally:
-            importlib.reload(dashboard_module)
+        assert mod.BUILD_DIR == os.path.join(mod.DASHBOARD_DIR, "build")
+        assert mod.DASHBOARD_DIR == os.path.join(_repo_root(), "dashboard")
 
 
 # --------------------------------------------------------------------------- #
