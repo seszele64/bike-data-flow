@@ -47,3 +47,5 @@ dagster_home
 dashboard/node_modules/
 dashboard/.svelte-kit/
 dashboard/.evidence/
+# Evidence static build output
+dashboard/build
