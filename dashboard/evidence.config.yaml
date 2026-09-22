@@ -1,0 +1,10 @@
+# Bike Data Flow — Evidence project configuration (S6.2 stub).
+# Minimal config so `evidence dev` / `evidence build` run offline with empty data.
+# Real datasources, queries and charts land in later steps (S9.x owns sources/wrm/).
+
+project:
+  name: bike-data-dashboard
+
+plugins:
+  components: {}
+  datasources: {}
