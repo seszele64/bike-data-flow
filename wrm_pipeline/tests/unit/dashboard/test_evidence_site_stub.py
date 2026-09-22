@@ -74,7 +74,8 @@ SECRET_PATTERN = re.compile(
 
 # No machine-local or absolute paths: the stub must be portable/offline.
 LOCAL_PATH_PATTERN = re.compile(
-    r"(/root/|/home/|/Users/|C:\\\\|file://)",
+    r"(/root/|/home/|/Users/|[A-Za-z]:[\\/]|file://)",
+    re.IGNORECASE,
 )
 
 
