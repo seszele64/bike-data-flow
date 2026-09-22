@@ -7,4 +7,7 @@ project:
 
 plugins:
   components: {}
-  datasources: {}
+  datasources:
+    # Key is the npm package name (loadSourcePlugins resolves keys from
+    # node_modules); provides the `duckdb` type used by sources/wrm/.
+    "@evidence-dev/duckdb": {}
