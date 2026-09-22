@@ -4,9 +4,11 @@ These assertions are locked against the recorded artifacts on disk:
 
 - ``dashboard/package.json`` / ``dashboard/package-lock.json`` — the Evidence
   toolkit scaffold: ``@evidence-dev/evidence`` 40.1.8 (resolved) with the
-  ``^2.0.1`` / ``^40.1.8`` / ``^5.0.0`` devDependency pins (B4.1 adds the
-  ``@evidence-dev/duckdb`` datasource plugin; the lockfile still records the
-  pre-B4.1 tree — no npm install in this offline step), node >= 18, and the
+  ``^2.0.1`` / ``^40.1.8`` / ``^3.1.4`` / ``^5.0.0`` devDependency pins (B4.1 adds the
+  ``@evidence-dev/duckdb`` datasource plugin; B5.1 adds the
+  ``@evidence-dev/tailwind`` styling plugin; the lockfile still records the
+  pre-B5.1 tree — no ``node_modules/@evidence-dev/tailwind`` entry yet,
+  no npm install in this offline step), node >= 18, and the
   dev/build/sources scripts.
 - ``.gitignore`` — Node/SvelteKit build artifacts under ``dashboard/`` must be
   ignored so the 400+ MB ``node_modules`` tree never enters version control.
@@ -91,11 +93,14 @@ class TestEvidenceScaffoldPackageJson:
     def test_dev_dependency_pins(self, package_json):
         # B4.1: @evidence-dev/duckdb ^2.0.1 provides the `duckdb` source type
         # used by dashboard/sources/wrm/ (registered in evidence.config.yaml
-        # at B4.2). Lockfile intentionally still records the pre-B4.1 tree
-        # (no npm install in this offline step) — see TestEvidenceLockfile.
+        # at B4.2). B5.1: @evidence-dev/tailwind ^3.1.4 provides the styling
+        # plugin. Lockfile intentionally still records the pre-B5.1 tree
+        # (no node_modules/@evidence-dev/tailwind entry — no npm install in
+        # this offline step) — see TestEvidenceLockfile.
         assert package_json["devDependencies"] == {
             "@evidence-dev/duckdb": "^2.0.1",
             "@evidence-dev/evidence": "^40.1.8",
+            "@evidence-dev/tailwind": "^3.1.4",
             "typescript": "^5.0.0",
         }
 
