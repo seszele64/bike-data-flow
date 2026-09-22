@@ -23,6 +23,11 @@ B4.2 evolution: ``evidence.config.yaml`` now registers the
 ``@evidence-dev/duckdb`` datasource plugin (``plugins.datasources`` is
 ``{"@evidence-dev/duckdb": {}}``); ``plugins.components`` stays ``{}``.
 
+B6.7 evolution: ``plugins.components`` now registers the
+``@evidence-dev/core-components`` component library
+(``{"@evidence-dev/core-components": {}}``) used by dashboard pages
+(incl. QueryViewer).
+
 Both files must also be tracked in git — the dashboard is source-controlled
 except for the ignored Node/SvelteKit build artifacts.
 
@@ -97,8 +102,11 @@ class TestEvidenceConfigStub:
         assert PROJECT_NAME == package_name
 
     def test_plugins_sections_are_empty_stubs(self, config: dict):
-        """B4.2: components stay empty; datasources registers @evidence-dev/duckdb."""
-        assert config["plugins"] == {"components": {}, "datasources": {"@evidence-dev/duckdb": {}}}
+        """B4.2 + B6.7: components registers core-components; datasources duckdb."""
+        assert config["plugins"] == {
+            "components": {"@evidence-dev/core-components": {}},
+            "datasources": {"@evidence-dev/duckdb": {}},
+        }
 
     def test_stub_locks_exact_top_level_keys(self, config: dict):
         assert set(config) == {"project", "plugins"}
@@ -250,14 +258,14 @@ class TestIndexRealPageContract:
 
     def test_stations_charts(self, index_text: str):
         """BarChart (bikes per station) + LineChart (bikes over time)."""
-        assert re.search(r"<BarChart\s+data=\{stations\}[^>]*x=\{name\}[^>]*y=\{bikes\}", index_text)
+        assert re.search(r'<BarChart\s+data=\{stations\}[^>]*x="name"[^>]*y="bikes"', index_text)
         assert re.search(
-            r"<LineChart\s+data=\{stations\}[^>]*x=\{timestamp\}[^>]*y=\{bikes\}", index_text
+            r'<LineChart\s+data=\{stations\}[^>]*x="timestamp"[^>]*y="bikes"', index_text
         )
 
     def test_density_chart(self, index_text: str):
         assert re.search(
-            r"<BarChart\s+data=\{density\}[^>]*x=\{grid_lat\}[^>]*y=\{density_per_1000m2\}",
+            r'<BarChart\s+data=\{density\}[^>]*x="grid_lat"[^>]*y="density_per_1000m2"',
             index_text,
         )
 
