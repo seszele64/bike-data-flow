@@ -1,7 +1,7 @@
 # Deployment Documentation
 
 **Feature**: 001-hashicorp-vault-integration  
-**Last Updated**: 2026-01-11
+**Last Updated**: 2026-09-20
 
 This document covers deployment procedures for the bike-data-flow project with HashiCorp Vault on Hetzner VPS.
 
@@ -374,6 +374,8 @@ WantedBy=multi-user.target
 
 ## Application Deployment
 
+The application is managed with [uv](https://docs.astral.sh/uv/). The deploy host needs **Python 3.12** (installed by uv on first use) and the exact dependency set comes from `uv.lock` — never install packages with `pip` directly.
+
 ### 1. Deploy Application
 
 ```bash
@@ -384,12 +386,16 @@ ssh deploy@your-server-ip
 git clone https://github.com/your-org/bike-data-flow.git
 cd bike-data-flow
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# Install uv (skip if already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
 
-# Install dependencies
-pip install -e ".[prod]"
+# Verify uv, then make Python 3.12 available
+uv --version
+uv python install 3.12
+
+# Install exact dependencies from uv.lock (no lockfile update, no pip)
+uv sync --frozen
 
 # Copy environment file
 cp .env.example .env
@@ -427,10 +433,10 @@ Type=simple
 User=deploy
 Group=deploy
 WorkingDirectory=/home/deploy/bike-data-flow
-Environment="PATH=/home/deploy/bike-data-flow/venv/bin"
+Environment="PATH=/home/deploy/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DAGSTER_HOME=/home/deploy/.dagster"
 Environment="VAULT_ADDR=https://vault.example.com:8200"
-ExecStart=/home/deploy/bike-data-flow/venv/bin/dagster dev
+ExecStart=/home/deploy/.local/bin/uv run --frozen dagster dev
 
 Restart=on-failure
 RestartSec=10
@@ -443,6 +449,12 @@ SyslogIdentifier=dagster
 [Install]
 WantedBy=multi-user.target
 ```
+
+Notes on the unit:
+
+- `uv run --frozen` resolves the project environment from `uv.lock` at service start and never updates the lockfile. If the environment is out of sync (for example after a `git pull`), uv restores it to the locked state before launching Dagster.
+- Run `uv sync --frozen` manually after each deploy (step 1) so the environment is ready before the service restarts.
+- `uv` is expected at `/home/deploy/.local/bin/uv` (the default of the install script above); adjust `ExecStart` if you installed it elsewhere.
 
 ### 4. Start Services
 
