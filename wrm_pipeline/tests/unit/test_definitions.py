@@ -258,20 +258,29 @@ class TestDailyScheduleTickPartitionKey:
             run_request.partition_key
         )
 
-    @pytest.mark.xfail(
-        reason="Known boundary: a tick on the partitions' start_date itself "
-        "(2025-05-01T05:00Z) derives key 2025-04-30, before "
-        "DailyPartitionsDefinition(start_date='2025-05-01'), and evaluate_tick "
-        "raises DagsterUnknownPartitionError while resolving partition tags. "
-        "Unreachable in production (deployed 2026); will XPASS if the schedule "
-        "ever clamps to the first valid partition.",
-        strict=True,
-    )
     def test_tick_on_partition_start_date_yields_valid_key(self):
-        """Day-one tick must produce a key inside the partitions' range."""
+        """Day-one tick is clamped to the first valid key (not 2025-04-30).
+
+        The schedule derives yesterday (2025-04-30) for a tick on the
+        partitions' start_date, which is outside the range; it must clamp to
+        the first partition key instead of emitting an unknown key, and the
+        RunRequest must carry the dagster/partition tag so the launched run
+        resolves ``context.partition_key``.
+        """
         run_request = self._evaluate_tick(
             datetime(2025, 5, 1, 5, 0, tzinfo=timezone.utc)
         )
+        assert run_request.partition_key == "2025-05-01"
+        assert run_request.tags["dagster/partition"] == "2025-05-01"
+        partitions_def = defs.get_job_def(JOB_NAME).partitions_def
+        assert partitions_def.has_partition_key(run_request.partition_key)
+
+    def test_tick_day_after_start_date_yields_first_key(self):
+        """The day after start_date targets yesterday, the first partition."""
+        run_request = self._evaluate_tick(
+            datetime(2025, 5, 2, 5, 0, tzinfo=timezone.utc)
+        )
+        assert run_request.partition_key == "2025-05-01"
         partitions_def = defs.get_job_def(JOB_NAME).partitions_def
         assert partitions_def.has_partition_key(run_request.partition_key)
 
