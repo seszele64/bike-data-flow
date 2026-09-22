@@ -7,6 +7,7 @@ the snapshot is a plain, credential-free DuckDB file holding the
 """
 
 import os
+import subprocess
 
 import duckdb
 from dagster import AssetExecutionContext, MaterializeResult, asset
@@ -111,5 +112,83 @@ def evidence_data_snapshot(context: AssetExecutionContext) -> MaterializeResult:
             "snapshot_path": SNAPSHOT_PATH,
             "stations_latest_rows": stations,
             "density_grid_rows": cells,
+        }
+    )
+
+
+# --- evidence_build (B4.4) -------------------------------------------------
+# Dashboard project dir and static build output, both env-overridable so a
+# deployment can relocate the checkout; defaults derive from the repo root
+# (same derivation as SNAPSHOT_PATH above).
+DASHBOARD_DIR = os.environ.get('WRM_DASHBOARD_DIR') or os.path.join(_REPO_ROOT, 'dashboard')
+# `evidence build` exports the static site into <dashboard>/build by default.
+BUILD_DIR = os.environ.get('WRM_DASHBOARD_BUILD_DIR') or os.path.join(DASHBOARD_DIR, 'build')
+
+# Secret env prefixes stripped from the npm child environment: the static
+# build must be credential-free, so HETZNER_*/S3_* secrets are never handed
+# to Node (and, as below, never logged).
+_SECRET_ENV_PREFIXES = ('HETZNER_', 'S3_')
+
+
+def _build_env() -> dict:
+    """Environment for the npm child process, minus S3/Hetzner secrets.
+
+    Reads os.environ only (no hardcoded keys); values are filtered out, never
+    printed.
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.upper().startswith(_SECRET_ENV_PREFIXES)
+    }
+
+
+@asset(
+    name="evidence_build",
+    compute_kind="npm",
+    group_name="dashboard",
+    deps=[evidence_data_snapshot],
+)
+def evidence_build(context: AssetExecutionContext) -> MaterializeResult:
+    """Run ``npm run build`` (Evidence static export) over the snapshot.
+
+    Depends on ``evidence_data_snapshot`` so the credential-free DuckDB file
+    exists before the site is built; no S3 credentials reach the build.
+    """
+    if not os.path.isfile(os.path.join(DASHBOARD_DIR, 'package.json')):
+        raise FileNotFoundError(
+            f"dashboard package.json not found under {DASHBOARD_DIR} "
+            "(set WRM_DASHBOARD_DIR to relocate it)"
+        )
+    if not os.path.isdir(os.path.join(DASHBOARD_DIR, 'node_modules')):
+        raise FileNotFoundError(
+            f"node_modules missing in {DASHBOARD_DIR}; run `npm ci` there first"
+        )
+
+    try:
+        proc = subprocess.run(
+            ['npm', 'run', 'build'],
+            cwd=DASHBOARD_DIR,
+            env=_build_env(),
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("npm not found on PATH") from exc
+
+    # Log command output tails only; the environment (and any secrets in it)
+    # is never logged.
+    if proc.stdout:
+        context.log.info(proc.stdout[-2000:])
+    if proc.returncode != 0:
+        context.log.error(proc.stderr[-2000:])
+        raise RuntimeError(f"`npm run build` failed with exit code {proc.returncode}")
+
+    return MaterializeResult(
+        metadata={
+            "dashboard_dir": DASHBOARD_DIR,
+            "build_dir": BUILD_DIR,
+            "build_exists": os.path.isdir(BUILD_DIR),
+            "command": "npm run build",
         }
     )
