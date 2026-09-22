@@ -192,3 +192,56 @@ def evidence_build(context: AssetExecutionContext) -> MaterializeResult:
             "command": "npm run build",
         }
     )
+
+
+# --- evidence_deploy (B5.3) ------------------------------------------------
+# Static-hosting handoff: no upload happens here (the GitHub Pages workflow
+# owns the publish step), so this asset only validates the credential-free
+# build output produced by ``evidence_build``.
+
+
+@asset(
+    name="evidence_deploy",
+    compute_kind="static",
+    group_name="dashboard",
+    deps=[evidence_build],
+)
+def evidence_deploy(context: AssetExecutionContext) -> MaterializeResult:
+    """Verify the static build output is ready for static hosting.
+
+    Depends on ``evidence_build``; checks that ``BUILD_DIR`` exists and
+    counts its files so the materialization records what would be published.
+    No S3 upload occurs here (the Pages workflow handles upload), and the
+    environment is filtered through ``_build_env`` so secrets never reach
+    any child process or the logs.
+    """
+    if not os.path.isdir(BUILD_DIR):
+        raise FileNotFoundError(
+            f"static build output not found at {BUILD_DIR} "
+            "(set WRM_DASHBOARD_BUILD_DIR to relocate it)"
+        )
+
+    file_count = sum(
+        len(filenames)
+        for _, _, filenames in os.walk(BUILD_DIR)
+    )
+    if file_count == 0:
+        raise RuntimeError(f"static build output at {BUILD_DIR} is empty")
+
+    # Ensure the deploy context inherits the same secret-free environment
+    # contract as the build (currently upload-free, but kept consistent so a
+    # future uploader cannot accidentally receive HETZNER_*/S3_* credentials).
+    env = _build_env()
+    assert all(not k.upper().startswith(_SECRET_ENV_PREFIXES) for k in env)
+
+    context.log.info(
+        f"Static build ready at {BUILD_DIR} ({file_count} files); "
+        "upload handled by the Pages workflow"
+    )
+    return MaterializeResult(
+        metadata={
+            "build_dir": BUILD_DIR,
+            "file_count": file_count,
+            "upload": "pages-workflow",
+        }
+    )
