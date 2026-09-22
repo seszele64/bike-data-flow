@@ -8,9 +8,11 @@ These assertions are locked against the recorded artifacts on disk:
   devDependency pins (B4.1 adds the ``@evidence-dev/duckdb`` datasource plugin;
   B5.1 adds the ``@evidence-dev/tailwind`` styling plugin; B6.6 adds the
   ``@evidence-dev/component-utilities`` + ``@evidence-dev/core-components``
-  component libraries; the lockfile still records the pre-B5.1 tree — no
-  ``node_modules/@evidence-dev/tailwind`` entry yet, no npm install in this
-  offline step), node >= 18, and the dev/build/sources scripts.
+  component libraries). Invariant: every pinned devDependency has a resolved
+  ``node_modules/`` entry in the lockfile — tailwind 3.1.4 (entry at
+  lockfile line 1904), core-components 5.4.2, component-utilities 4.0.13,
+  duckdb 2.0.1 — and the full tree is recorded (885 entries as of this
+  step), plus node >= 18 and the dev/build/sources scripts.
 - ``.gitignore`` — Node/SvelteKit build artifacts under ``dashboard/`` must be
   ignored so the 400+ MB ``node_modules`` tree never enters version control.
 - ``dashboard/sources/wrm/wrm.duckdb`` — the S9.1 snapshot stub: a plain
@@ -97,10 +99,9 @@ class TestEvidenceScaffoldPackageJson:
         # at B4.2). B5.1: @evidence-dev/tailwind ^3.1.4 provides the styling
         # plugin. B6.6: @evidence-dev/component-utilities ^4.0.13 +
         # @evidence-dev/core-components ^5.4.2 provide the component library
-        # (registered in evidence.config.yaml at B6.7). Lockfile intentionally
-        # still records the pre-B5.1 tree (no
-        # node_modules/@evidence-dev/tailwind entry — no npm install in this
-        # offline step) — see TestEvidenceLockfile.
+        # (registered in evidence.config.yaml at B6.7). All six pins are
+        # resolved as node_modules/ lockfile entries — see
+        # TestEvidenceLockfile.
         assert package_json["devDependencies"] == {
             "@evidence-dev/component-utilities": "^4.0.13",
             "@evidence-dev/core-components": "^5.4.2",
@@ -134,9 +135,28 @@ class TestEvidenceLockfile:
         assert entry["dev"] is True
 
     def test_lockfile_covers_installed_tree(self, lockfile):
-        """666 recorded packages: the lockfile lists the full dependency tree."""
+        """Invariant: the lockfile lists the full dependency tree.
+
+        885 package entries are recorded as of this step; the 600 floor is
+        deliberately loose so it only trips on a truncated/corrupt lockfile,
+        never on routine dependency additions.
+        """
         packages = lockfile["packages"]
         assert len(packages) >= 600
+
+    def test_tailwind_resolves_to_3_1_4(self, lockfile):
+        # B5.1: @evidence-dev/tailwind styling plugin — lockfile entry at
+        # line 1904 (was stale/documented as missing in earlier revisions).
+        entry = lockfile["packages"]["node_modules/@evidence-dev/tailwind"]
+        assert entry["version"] == "3.1.4"
+        assert entry["dev"] is True
+
+    def test_core_components_resolves_to_5_4_2(self, lockfile):
+        # B6.6: @evidence-dev/core-components library — resolved alongside
+        # @evidence-dev/component-utilities 4.0.13 in the same lockfile tree.
+        entry = lockfile["packages"]["node_modules/@evidence-dev/core-components"]
+        assert entry["version"] == "5.4.2"
+        assert entry["dev"] is True
 
 
 class TestEvidenceGitignore:
