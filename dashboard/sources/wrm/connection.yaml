@@ -1,0 +1,8 @@
+# WRM dashboard source (S9.2): local DuckDB snapshot stub.
+# Points the Evidence duckdb connector at the pipeline-written snapshot
+# (wrm_pipeline `evidence_data_snapshot` -> dashboard/sources/wrm/wrm.duckdb).
+# Query stubs (.sql) and plugin registration land in later S9.x steps.
+name: wrm
+type: duckdb
+options:
+  filename: wrm.duckdb
