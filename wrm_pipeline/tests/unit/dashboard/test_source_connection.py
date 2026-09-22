@@ -293,7 +293,7 @@ class TestDiscoveryPreconditions:
         }
         assert env_overrides == {}
         # yaml seam alone → effective options are exactly the recorded ones.
-        assert spec_raw.get("options") or {} == EXPECTED_OPTIONS
+        assert (spec_raw.get("options") or {}) == EXPECTED_OPTIONS
 
     def test_source_name_matches_directory_name(self, spec_raw: dict):
         """Queries address datasets as `<yaml name>.<query>`; dir must agree."""
