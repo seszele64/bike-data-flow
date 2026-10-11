@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "evidence dev",
-    "build": "evidence build",
+    "build": "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build",
     "sources": "evidence sources"
   },
   "devDependencies": {

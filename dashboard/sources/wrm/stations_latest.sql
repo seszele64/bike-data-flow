@@ -1,5 +1,6 @@
--- WRM stations_latest stub: expose the main-schema table as wrm.stations_latest.
--- Executed by the Evidence duckdb connector against this folder's wrm.duckdb.
+-- WRM stations_latest: read from the local main namespace in wrm.duckdb.
+-- Rows are dual-written there by wrm_pipeline (local duckdb + S3 parquet);
+-- the local table is the reliable source for dashboard builds (S3-03).
 SELECT
   station_id,
   name,

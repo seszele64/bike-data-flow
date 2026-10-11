@@ -2,7 +2,7 @@ name: Deploy Evidence dashboard to GitHub Pages
 
 on:
   push:
-    branches: [agent/dashboard, main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,11 @@ jobs:
         run: npm ci
       - name: Fetch sources
         working-directory: dashboard
+        env:
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
         run: npm run sources
       - name: Build Evidence site
         working-directory: dashboard
@@ -34,7 +39,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dashboard/build
+          path: dashboard/build/bike-data-flow
 
   deploy:
     if: github.ref == 'refs/heads/main'

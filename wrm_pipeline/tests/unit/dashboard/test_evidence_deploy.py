@@ -384,7 +384,7 @@ class TestPagesWorkflow:
 
     def test_triggers_push_branches_and_dispatch(self):
         on = _workflow_on(_load_workflow())
-        assert set(on["push"]["branches"]) == {"agent/dashboard", "main"}
+        assert set(on["push"]["branches"]) == {"main"}
         assert "workflow_dispatch" in on
 
     def test_permissions_locked(self):
@@ -426,9 +426,10 @@ class TestPagesWorkflow:
         assert all(s.get("working-directory") == "dashboard" for s in npm_steps)
 
     def test_upload_artifact_path_is_dashboard_build(self):
+        """Artifact is the base-path subpath (project Pages site)."""
         steps = _load_workflow()["jobs"]["build"]["steps"]
         upload = next(s for s in steps if "upload-pages-artifact" in s.get("uses", ""))
-        assert upload["with"]["path"] == "dashboard/build"
+        assert upload["with"]["path"] == "dashboard/build/bike-data-flow"
 
     def test_deploy_job_environment_and_action(self):
         deploy = _load_workflow()["jobs"]["deploy"]
@@ -439,13 +440,66 @@ class TestPagesWorkflow:
         assert "actions/deploy-pages@v4" in uses
 
     def test_workflow_is_credential_free(self):
+        """Global hygiene + S3 secrets scoped to Fetch sources only.
+
+        ``pages.yml`` injects ``S3_*``/``BUCKET_NAME`` via
+        ``${{ secrets.* }}`` references into the ``Fetch sources``
+        (``npm run sources``) step so Evidence can pull private-bucket
+        inputs. Every other step -- ``npm run build``, upload-artifact,
+        and the whole ``deploy`` job -- must stay secret-free, and no
+        literal secret values may appear anywhere (references only).
+        """
         with open(WORKFLOW_PATH, encoding="utf-8") as fh:
             text = fh.read()
         lowered = text.lower()
+        # Never-allowed credential families (global).
         assert "hetzner" not in lowered
-        assert "s3_secret" not in lowered
         assert "password" not in lowered
         assert "api_key" not in lowered
+        # No literal secret values: every `secrets.` occurrence must be a
+        # `${{ secrets.<NAME> }}` reference, and only the allow-listed
+        # fetch-sources names may appear.
+        import re
+
+        refs = re.findall(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}", text)
+        assert refs, "expected ${{ secrets.* }} references for Fetch sources"
+        assert set(refs) == {
+            "S3_ENDPOINT_URL",
+            "S3_ACCESS_KEY_ID",
+            "S3_SECRET_ACCESS_KEY",
+            "BUCKET_NAME",
+        }
+        # S3 secrets live only in the Fetch sources step env.
+        data = _load_workflow()
+        steps = data["jobs"]["build"]["steps"]
+        fetch = next(
+            s
+            for s in steps
+            if s.get("name") == "Fetch sources" or s.get("run") == "npm run sources"
+        )
+        env = fetch.get("env", {})
+        assert set(env) == {
+            "S3_ENDPOINT_URL",
+            "S3_ACCESS_KEY_ID",
+            "S3_SECRET_ACCESS_KEY",
+            "BUCKET_NAME",
+        }
+        for value in env.values():
+            assert re.fullmatch(
+                r"\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}", str(value)
+            ), f"Fetch sources env must be a secrets reference, got {value!r}"
+        # Build output path: Build site / upload-artifact steps carry no env
+        # secrets and no secrets references at all.
+        for step in steps:
+            if step is fetch:
+                continue
+            step_env = step.get("env", {})
+            for key in step_env:
+                assert "secret" not in key.lower()
+                assert not key.startswith("S3_")
+            assert "secrets." not in yaml.safe_dump(step)
+        deploy = data["jobs"]["deploy"]
+        assert "secrets." not in yaml.safe_dump(deploy)
 
     def test_workflow_is_git_tracked(self):
         result = subprocess.run(

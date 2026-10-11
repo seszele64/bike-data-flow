@@ -3,8 +3,15 @@
 Contract under test
 -------------------
 S9.2 added ``dashboard/sources/wrm/connection.yaml`` pointing Evidence's
-duckdb connector at the pipeline-written snapshot (S9.1
-``evidence_data_snapshot`` → ``dashboard/sources/wrm/wrm.duckdb``).
+duckdb connector at the pipeline-written datasets. S3-02..S3-04 moved the
+contract off the S9.1 local snapshot
+(``evidence_data_snapshot`` → ``dashboard/sources/wrm/wrm.duckdb``) to S3
+parquet: ``evidence_data_snapshot`` exports
+``s3://<BUCKET_NAME>/wrm/*.parquet`` and the ``.sql`` sources read them via
+``read_parquet()`` (S3-03). ``connection.yaml`` stays credential-free
+(S3-04); its ``options.filename`` is a retained driver-compat handle only
+(``@evidence-dev/duckdb`` requires ``filename`` and opens it READ_ONLY) —
+no local snapshot file is written or required (S3-01/S3-02).
 
 Discovery chain locked here (Evidence 40.1.8 / ``@evidence-dev/sdk``, read
 from ``dashboard/node_modules`` and mirrored in Python because this suite
@@ -53,10 +60,11 @@ due to missing plugin" arm is retired now the plugin is installed).
 Test strategy
 -------------
 Artifact-locked assertions against the recorded files (parse, exact keys,
-cross-path consistency with the S9.1 snapshot and the pipeline asset), plus
-a pure-Python port of the zod spec schema (``_validate_spec``) so
+parquet SQL contract in the ``.sql`` sources, credential-free connection),
+plus a pure-Python port of the zod spec schema (``_validate_spec``) so
 malformed-input edge cases run parametrically without ever touching the
-recorded artifact.
+recorded artifact. No test asserts the existence or contents of a local
+``wrm.duckdb`` file (S3-01/S3-02: untracked, never written).
 """
 
 from __future__ import annotations
@@ -67,7 +75,6 @@ import re
 import shutil
 import subprocess
 
-import duckdb
 import pytest
 import yaml
 
@@ -81,14 +88,29 @@ DASHBOARD_DIR = os.path.join(REPO_ROOT, "dashboard")
 SOURCES_DIR = os.path.join(DASHBOARD_DIR, "sources")
 WRM_SOURCE_DIR = os.path.join(SOURCES_DIR, "wrm")
 CONNECTION_YAML = os.path.join(WRM_SOURCE_DIR, "connection.yaml")
-SNAPSHOT_STUB = os.path.join(WRM_SOURCE_DIR, "wrm.duckdb")
+STATIONS_SQL = os.path.join(WRM_SOURCE_DIR, "stations_latest.sql")
+DENSITY_SQL = os.path.join(WRM_SOURCE_DIR, "density_grid.sql")
 EVIDENCE_CONFIG = os.path.join(DASHBOARD_DIR, "evidence.config.yaml")
 
-# S9.2 recorded contract values.
+# S9.2 recorded contract values, as amended by S3-02..S3-04 (parquet contract).
 EXPECTED_NAME = "wrm"
 EXPECTED_TYPE = "duckdb"
+# S3-04: retained driver-compat handle only — @evidence-dev/duckdb requires
+# `filename` (getRunner logs "Missing required duckdb option 'filename'")
+# and opens it READ_ONLY. It is NOT a snapshot path: no local wrm.duckdb
+# file is written (S3-02) or required (S3-01), so no test asserts its
+# existence — see TestParquetContract below.
 EXPECTED_OPTIONS = {"filename": "wrm.duckdb"}
-EXPECTED_SNAPSHOT_TABLES = {"stations_latest", "density_grid"}
+# Dual-write: the .sql sources read the local wrm.duckdb snapshot via FROM main.*.
+EXPECTED_MAIN_TABLES = {
+    "stations_latest": "main.stations_latest",
+    "density_grid": "main.density_grid",
+}
+# Tokens that must never appear as option keys/values (credential-free S3-04).
+# Checked against parsed option keys + string values, not raw comment text
+# (the yaml header legitimately contains the word "secrets" in prose).
+_FORBIDDEN_OPTION_KEYS = ("secret", "access_key", "endpoint", "token", "password")
+_FORBIDDEN_ENV_PREFIXES = ("S3_", "HETZNER_", "AWS_")
 
 # B4.3 seams: package-lock.json stays hard; the materialized node_modules tree
 # gates (skipif not installed) because it only exists after `npm install`.
@@ -216,7 +238,7 @@ def spec_raw() -> dict:
 
 
 class TestConnectionYamlArtifact:
-    """dashboard/sources/wrm/connection.yaml is exactly the S9.2 stub."""
+    """dashboard/sources/wrm/connection.yaml is exactly the S3-04 stub."""
 
     def test_connection_yaml_exists(self):
         assert os.path.isfile(CONNECTION_YAML)
@@ -307,27 +329,51 @@ class TestDiscoveryPreconditions:
         """Queries address datasets as `<yaml name>.<query>`; dir must agree."""
         assert spec_raw["name"] == os.path.basename(WRM_SOURCE_DIR)
 
-    def test_filename_points_at_recorded_snapshot_stub(self, spec_raw: dict):
-        """options.filename resolves to the S9.1 stub, which really opens."""
-        resolved = os.path.join(WRM_SOURCE_DIR, spec_raw["options"]["filename"])
-        assert resolved == SNAPSHOT_STUB
-        assert os.path.isfile(resolved)
+    def test_filename_is_retained_driver_handle_not_snapshot(self, spec_raw: dict):
+        """S3-04: `filename` is kept only because the duckdb driver requires it.
 
-        conn = duckdb.connect(resolved, read_only=True)
-        try:
-            tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
-        finally:
-            conn.close()
-        assert tables == EXPECTED_SNAPSHOT_TABLES
+        It is a bare relative handle opened READ_ONLY — NOT a snapshot path,
+        so this test deliberately asserts NO file existence (S3-01/S3-02:
+        the local wrm.duckdb is untracked and never written). The yaml
+        header documents the driver requirement and the parquet contract.
+        """
+        assert spec_raw["options"] == EXPECTED_OPTIONS
+        filename = spec_raw["options"]["filename"]
+        assert "/" not in filename  # bare handle, resolved relative to source dir
+        with open(CONNECTION_YAML) as fh:
+            header = fh.read()
+        lowered = header.lower()
+        assert "read_parquet" in lowered or "parquet" in lowered
+        assert "filename" in lowered
 
-    def test_filename_matches_pipeline_snapshot_path(self, spec_raw: dict):
-        """The yaml points at the exact file evidence_data_snapshot writes."""
-        from wrm_pipeline.assets import dashboard as dashboard_module
+    def test_connection_is_credential_free(self, spec_raw: dict):
+        """S3-04: no secrets embedded in connection options (ambient creds only)."""
+        options = spec_raw.get("options") or {}
+        for key, value in options.items():
+            assert not any(tok in key.lower() for tok in _FORBIDDEN_OPTION_KEYS), key
+            if isinstance(value, str):
+                assert not any(tok in value.lower() for tok in _FORBIDDEN_OPTION_KEYS), value
+                assert "://" not in value or value == EXPECTED_OPTIONS["filename"]
+        for key in os.environ:
+            if key.startswith("EVIDENCE_SOURCE__") and key.lower().startswith(
+                f"evidence_source__{EXPECTED_NAME.lower()}__"
+            ):
+                pytest.fail(f"env override seam must stay empty: {key}")
 
-        resolved = os.path.realpath(
-            os.path.join(WRM_SOURCE_DIR, spec_raw["options"]["filename"])
-        )
-        assert resolved == os.path.realpath(dashboard_module.SNAPSHOT_PATH)
+    def test_sql_sources_read_from_main(self):
+        """Dual-write local-first: both .sql sources query FROM main.* in wrm.duckdb."""
+        for sql_path, table in (
+            (STATIONS_SQL, "stations_latest"),
+            (DENSITY_SQL, "density_grid"),
+        ):
+            assert os.path.isfile(sql_path), f"missing source query: {sql_path}"
+            with open(sql_path) as fh:
+                sql = fh.read()
+            lowered = sql.lower()
+            assert f"from {EXPECTED_MAIN_TABLES[table]}" in lowered
+            assert "access_key" not in lowered
+            assert "secret_access" not in lowered
+            assert "hetzner" not in lowered
 
 
 # --------------------------------------------------------------------------- #
@@ -495,8 +541,9 @@ class TestLiveDiscovery:
 
         B4.3: hermetic (SEND_ANONYMOUS_USAGE_STATS=false, no network), and
         asserts the source is *processed* — not loader-skipped, not
-        plugin-not-found, exit 0. Zero .sql stubs exist at S9.2, so a clean
-        run discovers the source with an empty dataset manifest.
+        plugin-not-found, exit 0. The wrm source ships S3-03 .sql queries
+        (read_parquet over s3://bike-data/wrm/*.parquet); discovery must
+        process them without requiring any local wrm.duckdb file.
         Only npm-availability or an unmaterialized node_modules tree may skip.
         """
         npm = shutil.which("npm")

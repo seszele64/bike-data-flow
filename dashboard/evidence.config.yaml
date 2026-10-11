@@ -14,3 +14,7 @@ plugins:
     # Key is the npm package name (loadSourcePlugins resolves keys from
     # node_modules); provides the `duckdb` type used by sources/wrm/.
     "@evidence-dev/duckdb": {}
+
+deployment:
+  # Consumed by .evidence/template/svelte.config.js (kit.paths.base).
+  basePath: /bike-data-flow

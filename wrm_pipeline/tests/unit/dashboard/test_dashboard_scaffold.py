@@ -1,4 +1,4 @@
-"""Evidence tests for the dashboard scaffold (S6.1) and snapshot stub (S9.1).
+"""Evidence tests for the dashboard scaffold (S6.1) and dual-write sources.
 
 These assertions are locked against the recorded artifacts on disk:
 
@@ -15,9 +15,13 @@ These assertions are locked against the recorded artifacts on disk:
   step), plus node >= 18 and the dev/build/sources scripts.
 - ``.gitignore`` — Node/SvelteKit build artifacts under ``dashboard/`` must be
   ignored so the 400+ MB ``node_modules`` tree never enters version control.
-- ``dashboard/sources/wrm/wrm.duckdb`` — the S9.1 snapshot stub: a plain
-  DuckDB file already shaped with the two ``wrm_dash`` tables (empty in the
-  stub) that ``evidence_data_snapshot`` materializes.
+- ``dashboard/sources/wrm/*.sql`` — the dual-write local-first contract: the
+  two ``wrm`` source queries read the local ``wrm.duckdb`` snapshot via
+  ``FROM main.*`` (written locally by ``evidence_data_snapshot`` and
+  mirrored to S3 parquet). The local
+  ``dashboard/sources/wrm/wrm.duckdb`` file exists as a gitignored build
+  artifact; the column projections below lock the SELECT lists of those
+  queries.
 
 No network and no Node execution: the lockfile is parsed as JSON, and the
 ignore behavior is verified through ``git check-ignore``.
@@ -29,7 +33,6 @@ import json
 import os
 import subprocess
 
-import duckdb
 import pytest
 
 pytestmark = pytest.mark.evidence
@@ -48,7 +51,8 @@ IGNORED_DASHBOARD_PATHS = (
 
 # The dashboard-facing schema contract (must stay in sync with
 # assets/dashboard.py; also asserted at runtime by
-# test_evidence_data_snapshot.py — this file locks the *recorded stub*).
+# test_evidence_data_snapshot.py — this file locks the SELECT projections
+# of the recorded S3-03 .sql sources, NOT a local DuckDB stub).
 STUB_STATIONS_COLUMNS = [
     ("station_id", "VARCHAR"),
     ("name", "VARCHAR"),
@@ -87,9 +91,12 @@ class TestEvidenceScaffoldPackageJson:
         assert package_json["engines"]["node"] == ">=18"
 
     def test_evidence_scripts(self, package_json):
+        # BasePath pages: build writes to ./build/bike-data-flow so the
+        # Pages artifact (dashboard/build/bike-data-flow) serves under
+        # deployment.basePath /bike-data-flow.
         assert package_json["scripts"] == {
             "dev": "evidence dev",
-            "build": "evidence build",
+            "build": "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build",
             "sources": "evidence sources",
         }
 
@@ -190,64 +197,73 @@ class TestEvidenceGitignore:
         assert result.stdout.strip() == ""
 
 
-class TestSnapshotStubArtifact:
-    """The recorded S9.1 stub: a credential-free DuckDB with the wrm_dash shape.
+class TestParquetSourcesArtifact:
+    """The dual-write local-first contract: .sql sources read FROM main.*.
 
-    Deliberately asserts existence/shape only — row counts change every
-    scheduled materialization and are covered dynamically by
-    test_evidence_data_snapshot.py.
+    The local ``dashboard/sources/wrm/wrm.duckdb`` snapshot exists
+    (gitignored build artifact written by ``evidence_data_snapshot`` alongside
+    the S3 parquet mirror). This class locks the query text — ``FROM
+    main.stations_latest`` / ``FROM main.density_grid`` — the expected SELECT
+    projections (mirroring the STUB_* column contracts), and credential-free
+    sources (no keys/endpoints inlined; the local handle is allowed).
     """
 
-    @pytest.fixture
-    def snapshot_path(self) -> str:
-        return os.path.join(DASHBOARD_DIR, "sources", "wrm", "wrm.duckdb")
+    STATIONS_SQL = os.path.join(DASHBOARD_DIR, "sources", "wrm", "stations_latest.sql")
+    DENSITY_SQL = os.path.join(DASHBOARD_DIR, "sources", "wrm", "density_grid.sql")
+    SNAPSHOT_DUCKDB = os.path.join(DASHBOARD_DIR, "sources", "wrm", "wrm.duckdb")
+    EXPECTED_STATIONS_TABLE = "main.stations_latest"
+    EXPECTED_DENSITY_TABLE = "main.density_grid"
 
-    def test_stub_exists_and_opens(self, snapshot_path):
-        assert os.path.isfile(snapshot_path)
-        conn = duckdb.connect(snapshot_path, read_only=True)
-        conn.close()
+    def test_sql_files_exist(self):
+        assert os.path.isfile(self.STATIONS_SQL)
+        assert os.path.isfile(self.DENSITY_SQL)
 
-    def test_stub_contains_both_dashboard_tables(self, snapshot_path):
-        conn = duckdb.connect(snapshot_path, read_only=True)
-        try:
-            tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
-        finally:
-            conn.close()
-        assert tables == {"stations_latest", "density_grid"}
+    def test_local_snapshot_exists(self):
+        """Dual-write keeps a gitignored local wrm.duckdb for Evidence builds."""
+        assert os.path.isfile(self.SNAPSHOT_DUCKDB)
 
-    def test_stub_stations_latest_schema(self, snapshot_path):
-        conn = duckdb.connect(snapshot_path, read_only=True)
-        try:
-            described = [
-                (r[0], r[1])
-                for r in conn.execute("DESCRIBE stations_latest").fetchall()
-            ]
-        finally:
-            conn.close()
-        # Live duckdb 1.5.5 reports the timestamp column as TIMESTAMP_NS;
-        # normalize so the TIMESTAMP contract in STUB_STATIONS_COLUMNS holds.
-        normalized = [
-            (name, "TIMESTAMP" if dtype == "TIMESTAMP_NS" else dtype)
-            for name, dtype in described
-        ]
-        assert normalized == STUB_STATIONS_COLUMNS
+    def test_local_snapshot_is_gitignored(self):
+        probe = os.path.join(REPO_ROOT, "dashboard", "sources", "wrm", "wrm.duckdb")
+        result = subprocess.run(
+            ["git", "check-ignore", "-q", "--", probe],
+            cwd=REPO_ROOT,
+            capture_output=True,
+        )
+        assert result.returncode == 0, "wrm.duckdb must stay gitignored"
 
-    def test_stub_density_grid_schema(self, snapshot_path):
-        conn = duckdb.connect(snapshot_path, read_only=True)
-        try:
-            described = [
-                (r[0], r[1]) for r in conn.execute("DESCRIBE density_grid").fetchall()
-            ]
-        finally:
-            conn.close()
-        assert described == STUB_DENSITY_COLUMNS
+    def test_stations_reads_from_main(self):
+        """Local-first: stations query reads the wrm.duckdb main namespace."""
+        with open(self.STATIONS_SQL) as fh:
+            sql = fh.read().lower()
+        assert f"from {self.EXPECTED_STATIONS_TABLE}" in sql
 
-    def test_stub_tables_are_selectable(self, snapshot_path):
-        """Both tables respond to COUNT(*) (readable by the Evidence dashboard)."""
-        conn = duckdb.connect(snapshot_path, read_only=True)
-        try:
-            for table in ("stations_latest", "density_grid"):
-                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                assert count >= 0
-        finally:
-            conn.close()
+    def test_density_reads_from_main(self):
+        """Local-first: density query reads the wrm.duckdb main namespace."""
+        with open(self.DENSITY_SQL) as fh:
+            sql = fh.read().lower()
+        assert f"from {self.EXPECTED_DENSITY_TABLE}" in sql
+
+    def test_stations_projects_expected_columns(self):
+        """Every dashboard column is selected from the local stations table."""
+        with open(self.STATIONS_SQL) as fh:
+            sql = fh.read().lower()
+        for name, _dtype in STUB_STATIONS_COLUMNS:
+            assert name in sql, f"stations_latest.sql missing column {name}"
+
+    def test_density_projects_expected_columns(self):
+        """Every dashboard column is selected from the local density table."""
+        with open(self.DENSITY_SQL) as fh:
+            sql = fh.read().lower()
+        for name, _dtype in STUB_DENSITY_COLUMNS:
+            assert name in sql, f"density_grid.sql missing column {name}"
+
+    @pytest.mark.parametrize("table", ["stations_latest", "density_grid"])
+    def test_sql_is_credential_free(self, table: str):
+        """No secrets or endpoints inlined; local wrm.duckdb handle is allowed."""
+        path = self.STATIONS_SQL if table == "stations_latest" else self.DENSITY_SQL
+        with open(path) as fh:
+            lowered = fh.read().lower()
+        assert "access_key" not in lowered
+        assert "secret_access" not in lowered
+        assert "hetzner" not in lowered
+        assert "endpoint_url" not in lowered
