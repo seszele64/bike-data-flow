@@ -1,6 +1,6 @@
 # Bike Data Flow Pipeline
 
-A comprehensive data orchestration pipeline built with Dagster for processing and analyzing bike-sharing station data from Wrocław's WRM (Wrocławski Rower Miejski) system.
+A comprehensive data orchestration pipeline built with Dagster for processing and analyzing bike-sharing station data from Wrocław's WRM (Wrocławski Rower Miejski) system, paired with an Evidence dashboard for interactive reporting.
 
 ## 🎯 Goals
 
@@ -10,6 +10,7 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 - **Data Storage & Analytics**: Store processed data in S3 and provide DuckDB analytics views
 - **Data Quality & Monitoring**: Provide comprehensive summaries and processing statistics
 - **Scalable Architecture**: Handle large volumes of historical and real-time bike station data
+- **Interactive Reporting**: Publish an Evidence dashboard with Leaflet maps to GitHub Pages
 
 ## 🛠️ Tech Stack
 
@@ -17,7 +18,13 @@ A comprehensive data orchestration pipeline built with Dagster for processing an
 - **Dagster**: Data orchestration and pipeline management
 - **S3-Compatible Storage**: Object storage for raw, processed, and enhanced data files
 - **DuckDB**: High-performance analytical processing and querying
+- **Evidence**: Static site generator for interactive data dashboards and reports
 - **Pandas**: Data manipulation and transformation
+
+### Dashboard & Publishing
+- **Leaflet**: Interactive maps embedded in the dashboard
+- **OpenStreetMap**: Base map tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright))
+- **GitHub Pages**: Hosting for the published dashboard
 
 ### Supporting Libraries
 - **requests**: HTTP API calls for data ingestion
@@ -55,6 +62,11 @@ WRM API → Raw Data (S3) → [Sensor Detection] → Processing → Enhancement 
 - [`station_summary`](wrm_pipeline/wrm_pipeline/assets/duckdb/query_station_summary.py): Generates station summary statistics
 - [`bike_density_spatial_analysis`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Spatial density analysis for bike distribution
 - [`bike_density_map`](wrm_pipeline/wrm_pipeline/assets/duckdb/bike_spatial_density_analysis.py): Interactive density mapping
+
+#### 5. **Dashboard** (`dashboard`)
+- [`evidence_data_snapshot`](wrm_pipeline/wrm_pipeline/assets/dashboard.py): Exports the dashboard datasets (stations_latest, density_grid) to the local DuckDB snapshot and S3 Parquet
+- [`evidence_build`](wrm_pipeline/wrm_pipeline/assets/dashboard.py): Runs the Evidence static build (`npm run build`) over the snapshot
+- [`evidence_deploy`](wrm_pipeline/wrm_pipeline/assets/dashboard.py): Validates the credential-free static build output for GitHub Pages deployment
 
 ## 🔄 Automation & Event-Driven Processing
 
@@ -145,7 +157,7 @@ s3://bucket/bike-data/gen_info/
 ```
 
 ### DuckDB Analytics Database
-- **Location**: `db/analytics.duckdb` (relative to project root)
+- **Location**: `db/analytics.duckdb` (repo-root relative; override with `WRM_DUCKDB_PATH`)
 - **Views**: Enhanced data views for querying and analysis
 - **S3 Integration**: Direct querying of S3-stored Parquet files
 - **Performance**: Optimized for analytical workloads
@@ -180,38 +192,66 @@ s3://bucket/bike-data/gen_info/
 - **Temporal Analysis**: Historical trends and patterns
 - **Real-time Monitoring**: Current station and bike availability
 
+## 📊 Evidence Dashboard
+
+The pipeline publishes an [Evidence](https://evidence.dev) static dashboard that renders the
+`stations_latest` and `density_grid` snapshots as tables and interactive Leaflet maps. Both
+[`PointMap`](dashboard/pages/index.md) (stations) and [`BubbleMap`](dashboard/pages/index.md)
+(density) overlay the data on OpenStreetMap base tiles.
+
+- **Base map tiles**: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` — the OpenStreetMap tile
+  URL template. Because it contains `{z}`, `{x}` and `{y}` braces, the template is passed to the
+  maps as a braces-wrapped JS string (`basemap={"https://tile.openstreetmap.org/{z}/{x}/{y}.png"}`)
+  so mdsvex does not parse `{z}/{x}/{y}` as Svelte expressions.
+- **Attribution (required by OSM's tile policy)**: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
+- **Deployed dashboard**: <https://seszele64.github.io/bike-data-flow/> (GitHub Pages, built with basePath `/bike-data-flow`).
+
 ## 📁 Project Structure
 
 ```
 bike-data-flow/
+├── dashboard/                          # Evidence static dashboard (GitHub Pages)
+│   ├── evidence.config.yaml            # Evidence project configuration
+│   ├── package.json                    # Node dependencies & build/deploy scripts
+│   ├── pages/
+│   │   └── index.md                    # PointMap (stations) & BubbleMap (density) pages
+│   └── sources/
+│       └── wrm/                        # DuckDB source feeding the dashboard
+│           ├── connection.yaml
+│           ├── stations_latest.sql      # Stations snapshot query
+│           └── density_grid.sql         # Spatial density grid query
+├── db/
+│   └── analytics.duckdb                # Generated analytics database (git-ignored)
+├── docs/                               # Vault operations & deployment documentation
+├── specs/                              # Feature specifications (vault integration, retry)
+├── .github/
+│   └── workflows/
+│       ├── gitleaks.yml                # Secret scanning
+│       └── pages.yml                   # Evidence build & GitHub Pages deploy
+├── config/
+│   └── vault/                          # Vault server config, policies & audit devices
+├── scripts/
+│   └── vault/                          # Vault init, backup, restore & health-check scripts
+├── storage/                            # Object-storage client & partition helpers
 ├── wrm_pipeline/
-│   ├── assets/
-│   │   ├── stations/
-│   │   │   ├── __init__.py
-│   │   │   ├── commons.py              # Shared utilities and partitions
-│   │   │   ├── raw_all.py              # Raw data ingestion from API
-│   │   │   ├── processed_all.py        # Data processing and validation
-│   │   │   └── enhanced_all.py         # Data enhancement and metadata
-│   │   ├── duckdb/
-│   │   │   ├── __init__.py
-│   │   │   ├── create_enhanced_views.py # DuckDB view creation
-│   │   │   ├── query_station_summary.py # Station summary queries
-│   │   │   ├── bike_spatial_density_analysis.py # Spatial analysis
-│   │   │   └── README.md               # DuckDB usage documentation
-│   │   └── __init__.py
-│   ├── sensors/
-│   │   ├── __init__.py
-│   │   └── stations.py                 # Event detection sensors
-│   ├── jobs/
-│   │   ├── __init__.py
-│   │   └── stations.py                 # Processing job definitions
-│   ├── models/
-│   │   └── stations.py                 # Data models and schemas
+│   ├── wrm_pipeline/                   # Installable pipeline package
+│   │   ├── assets/
+│   │   │   ├── stations/               # Raw ingestion, processing & enhancement assets
+│   │   │   ├── duckdb/                 # DuckDB view creation & analysis scripts
+│   │   │   └── dashboard.py            # Dashboard build & data-snapshot assets
+│   │   ├── sensors/                    # Event detection sensors
+│   │   ├── jobs/                       # Processing job definitions
+│   │   ├── models/                     # Data models and schemas
+│   │   ├── vault/                      # Vault client, rotation & policy helpers
+│   │   ├── retry/                      # API/S3 retry & circuit-breaker logic
+│   │   ├── migration/                  # Secret migration to Vault
+│   │   ├── ops/                        # Operational helpers
+│   │   ├── config.py                   # Configuration management
+│   │   └── definitions.py              # Dagster definitions entrypoint
 │   ├── tests/
 │   │   ├── unit/                       # Unit tests (default pytest target)
 │   │   ├── integration/                # Integration tests (run with -m integration)
 │   │   └── BASELINE.md                 # Recorded pre-ETL pytest baseline
-│   ├── config.py                       # Configuration management
 │   └── pyproject.toml                  # Package metadata & dependency groups
 ├── pyproject.toml                      # uv workspace root & pytest configuration
 ├── conftest.py                         # Shared pytest fixtures & marker bootstrap
@@ -288,8 +328,11 @@ GROUP BY record_type;
 import duckdb
 import os
 
-# Database path relative to project root
-db_path = os.path.join(os.path.dirname(__file__), 'db', 'analytics.duckdb')
+# Analytics DB lives at the repo root: <repo>/db/analytics.duckdb
+# (override with the WRM_DUCKDB_PATH environment variable)
+db_path = os.environ.get("WRM_DUCKDB_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "db", "analytics.duckdb"
+)
 
 with duckdb.connect(db_path) as conn:
     # Configure S3 credentials
@@ -344,7 +387,7 @@ Tests live in [`wrm_pipeline/tests/`](wrm_pipeline/tests/) (`unit/` and `integra
 # Install/sync the environment first (--all-packages includes the dev group)
 uv sync --frozen --all-packages
 
-# Unit tests (recorded baseline: 149 passed — see wrm_pipeline/tests/BASELINE.md)
+# Unit tests (recorded baseline: 206 passed, 3 skipped, 1 xfailed, 15 warnings — see wrm_pipeline/tests/BASELINE.md)
 uv run pytest
 
 # Integration tests — explicitly selected; currently a placeholder suite

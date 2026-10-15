@@ -1,5 +1,7 @@
 # Bike Data Flow Dashboard Architecture
 
+> **⚠️ SUPERSEDED:** This Next.js 14+/Plotly/Vercel/Redis design was never implemented; the dashboard now ships as an [Evidence](https://evidence.dev) static app deployed to GitHub Pages under [`dashboard/`](../dashboard/) — see the [Evidence Dashboard section](../README.md#-evidence-dashboard) in the README. The plan below is retained for historical context only.
+
 ## Executive Summary
 
 This document outlines the architecture for an internet-accessible web dashboard for the Wrocław WRM bike-sharing system. The dashboard provides real-time and historical analytics visualization, leveraging the existing Dagster-based data pipeline with DuckDB and S3/MinIO storage.
