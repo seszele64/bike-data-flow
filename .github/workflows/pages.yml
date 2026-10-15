@@ -25,6 +25,66 @@ jobs:
       - name: Install dependencies
         working-directory: dashboard
         run: npm ci
+      - name: Assemble wrm.duckdb from S3 parquet
+        working-directory: dashboard
+        env:
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+
+          # DuckDB CLI pinned to an immutable release asset: v1.5.6, whose
+          # build commit is 069cc9f9b5be802405797faecc284961b07c70ef (as
+          # reported by `duckdb --version`). Never resolved from "latest".
+          DUCKDB_VERSION="1.5.6"
+          DUCKDB_SHA256="6e89deac1ebbc36eed0291caf8b567b030c7b86ac35998f71854e22b3c5d5e2f"
+          DUCKDB_DIR="$(mktemp -d)"
+          trap 'rm -rf "$DUCKDB_DIR"' EXIT
+
+          curl -fsSL -o "$DUCKDB_DIR/duckdb_cli.zip" \
+            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
+          echo "${DUCKDB_SHA256}  $DUCKDB_DIR/duckdb_cli.zip" | sha256sum -c -
+          unzip -oq "$DUCKDB_DIR/duckdb_cli.zip" -d "$DUCKDB_DIR"
+          DUCKDB="$DUCKDB_DIR/duckdb"
+
+          # Local snapshot consumed READ_ONLY by the wrm source connection
+          # (sources/wrm/connection.yaml -> options.filename). Build it as a
+          # sibling temp file and atomically replace the target so an
+          # interrupted build never publishes a half-written database.
+          SNAPSHOT="sources/wrm/wrm.duckdb"
+          TMP="${SNAPSHOT}.tmp"
+          rm -f "$TMP" "${TMP}.wal" "${SNAPSHOT}.wal"
+
+          # DuckDB's s3_endpoint must be a bare hostname: drop the scheme and
+          # any trailing slash. Credentials and the bucket name are read from
+          # the environment by the DuckDB session itself (getenv), so no secret
+          # value is ever written into the SQL text or the job log.
+          ENDPOINT="${S3_ENDPOINT_URL:-}"
+          ENDPOINT="${ENDPOINT#https://}"
+          ENDPOINT="${ENDPOINT#http://}"
+          ENDPOINT="${ENDPOINT%/}"
+          export WRM_S3_ENDPOINT="$ENDPOINT"
+
+          # SQL on stdin (not -c): the DuckDB process exits non-zero on any
+          # error, and set -e above aborts before the atomic move.
+          "$DUCKDB" <<SQL
+          INSTALL httpfs;
+          LOAD httpfs;
+          SET s3_region = 'auto';
+          SET s3_endpoint = getenv('WRM_S3_ENDPOINT');
+          SET s3_url_style = 'path';
+          SET s3_use_ssl = true;
+          SET s3_access_key_id = getenv('S3_ACCESS_KEY_ID');
+          SET s3_secret_access_key = getenv('S3_SECRET_ACCESS_KEY');
+          ATTACH '${TMP}' AS snapshot_db (READ_WRITE);
+          CREATE OR REPLACE TABLE snapshot_db.stations_latest (station_id,name,bikes,spaces,total_docks,installed,lat,lon,"timestamp") AS SELECT * FROM read_parquet('s3://' || getenv('BUCKET_NAME') || '/wrm/stations_latest.parquet');
+          CREATE OR REPLACE TABLE snapshot_db.density_grid (grid_lat,grid_lon,bike_count,station_count,density_per_1000m2) AS SELECT * FROM read_parquet('s3://' || getenv('BUCKET_NAME') || '/wrm/density_grid.parquet');
+          DETACH snapshot_db;
+          SQL
+
+          mv -f "$TMP" "$SNAPSHOT"
       - name: Fetch sources
         working-directory: dashboard
         env:

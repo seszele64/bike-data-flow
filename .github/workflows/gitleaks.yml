@@ -1,0 +1,48 @@
+name: Secret scan (gitleaks)
+
+# Dedicated, read-only entropy + regex secret scan. Kept out of pages.yml so
+# the Pages assemble/deploy flow can run in parallel and this check can gate
+# PRs independently. Fails closed: gitleaks exits non-zero when it detects a
+# leak, which fails the job.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: scanning only needs to read repository contents. No write
+# scopes are granted, so this workflow can never modify the repo or push.
+permissions:
+  contents: read
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks scans every commit (past + present), not
+          # just the tip, maximizing entropy coverage.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        # Pinned to an immutable commit, v2.3.9, never a floating tag.
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          # Read-only token: used only to resolve the PR/push commit range.
+          # This is the ephemeral Actions token reference, never a literal value.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Organization-owned repos require a license secret; personal repos
+          # do not. Referenced by name only (empty if unset) - no value here.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          # CLI pinned to the version this action release ships/tested with.
+          GITLEAKS_VERSION: "8.24.3"
+          # No writes: do not post PR comments or upload SARIF artifacts.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
