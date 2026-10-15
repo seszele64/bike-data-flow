@@ -19,7 +19,6 @@ SELECT
   installed,
   lat,
   lon,
-  lon AS long,
   timestamp
 FROM wrm.stations_latest
 ORDER BY timestamp DESC, name
@@ -53,7 +52,7 @@ ORDER BY timestamp DESC, name
 <PointMap
   data={stations}
   lat="lat"
-  long="long"
+  long="lon"
   height="400"
   title="Stations by location"
   basemap={"https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
@@ -66,7 +65,6 @@ ORDER BY timestamp DESC, name
 SELECT
   grid_lat,
   grid_lon,
-  grid_lon AS long,
   bike_count,
   station_count,
   density_per_1000m2
@@ -85,7 +83,7 @@ ORDER BY density_per_1000m2 DESC, grid_lat, grid_lon
 <BubbleMap
   data={density}
   lat="grid_lat"
-  long="long"
+  long="grid_lon"
   size="bike_count"
   height="400"
   title="Bike density by grid cell"

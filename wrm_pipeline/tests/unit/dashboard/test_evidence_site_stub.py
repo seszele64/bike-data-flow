@@ -269,30 +269,30 @@ class TestIndexRealPageContract:
         """BarChart (bikes per station) + LineChart (bikes over time) + PointMap.
 
         MAP-05: the ``### Stations by location`` PointMap replaces the former
-        ScatterPlot axis lock (``lat``/``lon``); it projects the aliased
-        ``long`` snapshot column rather than ``y="bikes"``.
+        ScatterPlot axis lock (``lat``/``lon``); it binds the snapshot
+        ``lon`` column directly (``long="lon"``) rather than ``y="bikes"``.
         """
         assert re.search(r'<BarChart\s+data=\{stations\}[^>]*x="name"[^>]*y="bikes"', index_text)
         assert re.search(
             r'<LineChart\s+data=\{stations\}[^>]*x="timestamp"[^>]*y="bikes"', index_text
         )
         assert re.search(
-            r'<PointMap\s+data=\{stations\}[^>]*lat="lat"[^>]*long="long"', index_text
+            r'<PointMap\s+data=\{stations\}[^>]*lat="lat"[^>]*long="lon"', index_text
         )
 
     def test_density_chart(self, index_text: str):
         """BarChart (density per cell) + BubbleMap (bike_count as size).
 
         MAP-05: the ``### Bike density map`` BubbleMap replaces the former
-        axis lock (``grid_lat``/``density_per_1000m2``); it binds the aliased
-        ``long`` column and ``size="bike_count"``.
+        axis lock (``grid_lat``/``density_per_1000m2``); it binds the snapshot
+        ``grid_lon`` column (``long="grid_lon"``) and ``size="bike_count"``.
         """
         assert re.search(
             r'<BarChart\s+data=\{density\}[^>]*x="grid_lat"[^>]*y="density_per_1000m2"',
             index_text,
         )
         assert re.search(
-            r'<BubbleMap\s+data=\{density\}[^>]*lat="grid_lat"[^>]*long="long"[^>]*size="bike_count"',
+            r'<BubbleMap\s+data=\{density\}[^>]*lat="grid_lat"[^>]*long="grid_lon"[^>]*size="bike_count"',
             index_text,
         )
 
