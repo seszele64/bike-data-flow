@@ -440,14 +440,16 @@ class TestPagesWorkflow:
         assert "actions/deploy-pages@v4" in uses
 
     def test_workflow_is_credential_free(self):
-        """Global hygiene + S3 secrets scoped to Fetch sources only.
+        """Global hygiene + S3 secrets scoped to the S3-consuming steps.
 
         ``pages.yml`` injects ``S3_*``/``BUCKET_NAME`` via
-        ``${{ secrets.* }}`` references into the ``Fetch sources``
-        (``npm run sources``) step so Evidence can pull private-bucket
-        inputs. Every other step -- ``npm run build``, upload-artifact,
-        and the whole ``deploy`` job -- must stay secret-free, and no
-        literal secret values may appear anywhere (references only).
+        ``${{ secrets.* }}`` references into the two steps that read the
+        private bucket: ``Assemble wrm.duckdb from S3 parquet`` and
+        ``Fetch sources`` (``npm run sources``) -- Evidence pulls both the
+        assembled ``wrm.duckdb`` snapshot and its sources from S3. Every
+        other step -- ``npm run build``, upload-artifact, and the whole
+        ``deploy`` job -- must stay secret-free, and no literal secret
+        values may appear anywhere (references only).
         """
         with open(WORKFLOW_PATH, encoding="utf-8") as fh:
             text = fh.read()
@@ -469,7 +471,9 @@ class TestPagesWorkflow:
             "S3_SECRET_ACCESS_KEY",
             "BUCKET_NAME",
         }
-        # S3 secrets live only in the Fetch sources step env.
+        # S3 secrets live only in the two S3-consuming steps' env: the
+        # Assemble step (builds wrm.duckdb from S3 parquet) and Fetch
+        # sources (npm run sources).
         data = _load_workflow()
         steps = data["jobs"]["build"]["steps"]
         fetch = next(
@@ -477,21 +481,30 @@ class TestPagesWorkflow:
             for s in steps
             if s.get("name") == "Fetch sources" or s.get("run") == "npm run sources"
         )
-        env = fetch.get("env", {})
-        assert set(env) == {
+        assemble = next(
+            s
+            for s in steps
+            if s.get("name") == "Assemble wrm.duckdb from S3 parquet"
+        )
+        allowed_env = {
             "S3_ENDPOINT_URL",
             "S3_ACCESS_KEY_ID",
             "S3_SECRET_ACCESS_KEY",
             "BUCKET_NAME",
         }
-        for value in env.values():
-            assert re.fullmatch(
-                r"\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}", str(value)
-            ), f"Fetch sources env must be a secrets reference, got {value!r}"
+        # Both S3-consuming steps must expose exactly the allow-listed
+        # names, each bound to a `secrets.*` reference (never a literal).
+        for s3_step in (assemble, fetch):
+            env = s3_step.get("env", {})
+            assert set(env) == allowed_env
+            for value in env.values():
+                assert re.fullmatch(
+                    r"\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}", str(value)
+                ), f"{s3_step.get('name')} env must be a secrets reference, got {value!r}"
         # Build output path: Build site / upload-artifact steps carry no env
         # secrets and no secrets references at all.
         for step in steps:
-            if step is fetch:
+            if step is fetch or step is assemble:
                 continue
             step_env = step.get("env", {})
             for key in step_env:
