@@ -433,4 +433,9 @@ class TestBuildCommandContract:
         repo_root = _repo_root()
         with open(os.path.join(repo_root, "dashboard", "package.json")) as fh:
             pkg = json.load(fh)
-        assert pkg["scripts"]["build"] == "evidence build"
+        # basePath /bike-data-flow: build outputs to ./build/bike-data-flow.
+        assert (
+            pkg["scripts"]["build"]
+            == "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build"
+        )
+        assert "evidence build" in pkg["scripts"]["build"]

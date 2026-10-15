@@ -1,6 +1,15 @@
-# WRM dashboard source (S9.2): local DuckDB snapshot stub.
-# Points the Evidence duckdb connector at the pipeline-written snapshot
-# (wrm_pipeline `evidence_data_snapshot` -> dashboard/sources/wrm/wrm.duckdb).
+# WRM dashboard source (S9.2 stub, S3-04): DuckDB connector over the local
+# dual-write snapshot. wrm_pipeline `evidence_data_snapshot` writes both
+# dashboard datasets to TWO targets: the local dashboard/sources/wrm/wrm.duckdb
+# file (written first, atomically) and s3://<bucket>/wrm/*.parquet (the second,
+# upload target). The .sql sources here read the LOCAL file — stations_latest.sql
+# and density_grid.sql both `FROM main.<table>` in wrm.duckdb — so `filename`
+# below is the real primary read target, opened READ_ONLY by
+# @evidence-dev/duckdb. S3 parquet remains the secondary target for downstream
+# consumers; it is NOT read by these queries and needs no httpfs here.
+# S3 access at upload time uses ambient credentials at runtime (process env /
+# instance role, filtered before any npm child by `_build_env` stripping
+# S3_*/HETZNER_*): no secrets are embedded in this file or passed via options.
 # Query stubs (.sql) and plugin registration land in later S9.x steps.
 name: wrm
 type: duckdb

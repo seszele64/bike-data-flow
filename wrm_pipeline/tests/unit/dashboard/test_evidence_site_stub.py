@@ -110,7 +110,15 @@ class TestEvidenceConfigStub:
         }
 
     def test_stub_locks_exact_top_level_keys(self, config: dict):
-        assert set(config) == {"project", "plugins"}
+        # fix/evidence-basepath-pages: allow optional `deployment` key for
+        # GitHub Pages basePath; project/plugins stay locked.
+        assert set(config) <= {"project", "plugins", "deployment"}
+        assert {"project", "plugins"} <= set(config)
+
+    def test_deployment_basepath_for_pages(self, config: dict):
+        """Pages deploy allows `deployment.basePath: /bike-data-flow` only."""
+        deployment = config.get("deployment", {"basePath": "/bike-data-flow"})
+        assert deployment == {"basePath": "/bike-data-flow"}
 
     def test_config_is_credential_free(self, config_text: str):
         assert SECRET_PATTERN.search(config_text) is None

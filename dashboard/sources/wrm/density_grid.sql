@@ -1,5 +1,6 @@
--- WRM density_grid stub: expose the main-schema table as wrm.density_grid.
--- Executed by the Evidence duckdb connector against this folder's wrm.duckdb.
+-- WRM density_grid: read from the local main namespace in wrm.duckdb.
+-- Rows are dual-written there by wrm_pipeline (local duckdb + S3 parquet);
+-- the local table is the reliable source for dashboard builds (S3-03).
 SELECT
   grid_lat,
   grid_lon,

@@ -34,6 +34,22 @@ ORDER BY timestamp DESC, name
 
 <LineChart data={stations} x="timestamp" y="bikes" />
 
+<!-- Linked cross-filter: this ScatterPlot and the BubbleChart below share the exact
+     connectGroup="wrm-link", so ECharts `connect()` syncs cursor/zoom/tooltip between them.
+     Caveat: `connectGroup` is shipped but undocumented in @evidence-dev/core-components 5.4.2.
+     It is wired in ECharts.svelte (export let connectGroup) -> component-utilities/echarts.js
+     (chart.group = options.connectGroup; connect(options.connectGroup)). Canvas is the default renderer. -->
+
+### Stations by location
+
+<ScatterPlot
+  data={stations}
+  x="lon"
+  y="lat"
+  connectGroup="wrm-link"
+  title="Stations by location"
+/>
+
 ## Spatial density
 
 ```sql density
@@ -52,3 +68,14 @@ ORDER BY density_per_1000m2 DESC, grid_lat, grid_lon
 ### Density per 1000 m² grid cell
 
 <BarChart data={density} x="grid_lat" y="density_per_1000m2" />
+
+### Bike density map
+
+<BubbleChart
+  data={density}
+  x="grid_lon"
+  y="grid_lat"
+  size="bike_count"
+  connectGroup="wrm-link"
+  title="Bike density by grid cell"
+/>
