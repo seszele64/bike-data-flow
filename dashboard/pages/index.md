@@ -19,6 +19,7 @@ SELECT
   installed,
   lat,
   lon,
+  lon AS long,
   timestamp
 FROM wrm.stations_latest
 ORDER BY timestamp DESC, name
@@ -34,20 +35,29 @@ ORDER BY timestamp DESC, name
 
 <LineChart data={stations} x="timestamp" y="bikes" />
 
-<!-- Linked cross-filter: this ScatterPlot and the BubbleChart below share the exact
-     connectGroup="wrm-link", so ECharts `connect()` syncs cursor/zoom/tooltip between them.
-     Caveat: `connectGroup` is shipped but undocumented in @evidence-dev/core-components 5.4.2.
-     It is wired in ECharts.svelte (export let connectGroup) -> component-utilities/echarts.js
-     (chart.group = options.connectGroup; connect(options.connectGroup)). Canvas is the default renderer. -->
+<!-- No ECharts cross-filter here: PointMap (below) and BubbleMap are Leaflet maps rendered
+     via EvidenceMap.js/BaseMap.svelte, not ECharts, so ECharts `connect()` and its
+     `connectGroup` option do not apply to them. `connectGroup` is still shipped (undocumented)
+     in @evidence-dev/core-components 5.4.2 (ECharts.svelte -> component-utilities/echarts.js),
+     but no component on this page sets it; Canvas is the default renderer.
+     Tiles: BaseMap's `basemap` prop is a URL template, not a style name (e.g. "mono"/"blank").
+     Both maps below set it explicitly to OpenStreetMap
+     https://tile.openstreetmap.org/{z}/{x}/{y}.png, so tiles need network access to
+     tile.openstreetmap.org. The template must be a braces-wrapped JS string
+     (basemap={"..."}) so mdsvex does not treat {z}/{x}/{y} as Svelte expressions.
+     OSM's tile usage policy (https://operations.osmfoundation.org/policies/tiles/)
+     requires attribution, hence the `attribution` prop on each map. -->
 
 ### Stations by location
 
-<ScatterPlot
+<PointMap
   data={stations}
-  x="lon"
-  y="lat"
-  connectGroup="wrm-link"
+  lat="lat"
+  long="long"
+  height="400"
   title="Stations by location"
+  basemap={"https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
+  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 />
 
 ## Spatial density
@@ -56,6 +66,7 @@ ORDER BY timestamp DESC, name
 SELECT
   grid_lat,
   grid_lon,
+  grid_lon AS long,
   bike_count,
   station_count,
   density_per_1000m2
@@ -71,11 +82,13 @@ ORDER BY density_per_1000m2 DESC, grid_lat, grid_lon
 
 ### Bike density map
 
-<BubbleChart
+<BubbleMap
   data={density}
-  x="grid_lon"
-  y="grid_lat"
+  lat="grid_lat"
+  long="long"
   size="bike_count"
-  connectGroup="wrm-link"
+  height="400"
   title="Bike density by grid cell"
+  basemap={"https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
+  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 />
