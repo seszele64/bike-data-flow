@@ -33,6 +33,9 @@ jobs:
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
         run: npm run sources
+      - name: Clean previous build output
+        working-directory: dashboard
+        run: rm -rf build/bike-data-flow
       - name: Build Evidence site
         working-directory: dashboard
         run: npm run build
