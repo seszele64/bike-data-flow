@@ -51,6 +51,30 @@ PUBLISH_STEPS = (
 )
 PUBLISH_IF = "github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'"
 
+# Remote S3 mutations. Checked against comment-free shell so prose such as
+# "skip the put-object" is not mistaken for a writer; the assemble step's local
+# `mv -f` must not match the `s3 mv` pattern.
+S3_WRITE_COMMANDS = (
+    "put-object",
+    "copy-object",
+    "delete-object",
+    "s3 cp",
+    "s3 mv",
+    "s3 rm",
+    "s3 sync",
+)
+
+# SQL writers need no AWS CLI verb: a DuckDB `COPY (...) TO 's3://...'` mutates
+# the bucket with the assemble step's credentials. The negated class keeps the
+# match inside one statement (DuckDB terminates with `;`), so a read such as
+# `read_parquet('s3://...')` never trips it.
+S3_WRITE_PATTERNS = (
+    (
+        "duckdb copy to s3",
+        re.compile(r"\bCOPY\b[^;]*?\bTO\s+['\"]s3a?://", re.IGNORECASE),
+    ),
+)
+
 
 def _load() -> dict:
     with open(WORKFLOW_PATH, encoding="utf-8") as fh:
@@ -95,12 +119,38 @@ def _marker_lines(run: str) -> dict[str, str]:
     return wanted
 
 
+def _strip_shell_comment(line: str) -> str:
+    """Drop a trailing shell comment, honoring simple quoting and escapes.
+
+    Not a shell parser: ``#`` starts a comment only at the start of a line or
+    after whitespace, so ``${VAR#prefix}`` stays intact, and a quoted ``#`` is
+    left alone (``echo "# not a comment"``).
+    """
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index].rstrip()
+    return line
+
+
+def _shell_code(run: str) -> str:
+    """``run`` with whole-line and trailing inline comments removed."""
+    return "\n".join(_strip_shell_comment(line) for line in run.splitlines())
+
+
 def _uses_errexit(run: str) -> bool:
     """True when an actual `set -e`/`set -euo` runs (comments excluded)."""
-    code = "\n".join(
-        line for line in run.splitlines() if not line.lstrip().startswith("#")
-    )
-    return re.search(r"\bset\s+-[a-z]*e[a-z]*\b", code) is not None
+    return re.search(r"\bset\s+-[a-z]*e[a-z]*\b", _shell_code(run)) is not None
 
 
 def _fingerprint_function(run: str) -> list[str]:
@@ -108,6 +158,61 @@ def _fingerprint_function(run: str) -> list[str]:
     match = re.search(r"^fingerprint\(\) \{\n(.*?)\n\s*\}$", run, re.MULTILINE | re.DOTALL)
     assert match, "fingerprint() helper not found"
     return [line.strip() for line in match.group(1).splitlines() if line.strip()]
+
+
+def _s3_write_commands(run: str) -> list[str]:
+    """Mutating S3 commands actually present in ``run`` outside comments."""
+    code = _shell_code(run)
+    found = [command for command in S3_WRITE_COMMANDS if command in code]
+    found.extend(
+        name for name, pattern in S3_WRITE_PATTERNS if pattern.search(code)
+    )
+    return found
+
+
+def _var_assignments(code: str, var: str) -> list[re.Match[str]]:
+    """Every assignment to shell ``var`` (``var=``/``+=``, not comparisons)."""
+    return list(re.finditer(rf"\b{re.escape(var)}\s*\+?=", code))
+
+
+def _split_top_level(expr: str, op: str) -> list[str]:
+    """Split ``expr`` on ``op`` only where it is not nested in parentheses."""
+    depth = 0
+    parts: list[str] = []
+    start = 0
+    index = 0
+    while index < len(expr):
+        char = expr[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and expr.startswith(op, index):
+            parts.append(expr[start:index].strip())
+            index += len(op)
+            start = index
+            continue
+        index += 1
+    assert depth == 0, expr
+    parts.append(expr[start:].strip())
+    return parts
+
+
+def _strip_outer_parens(expr: str) -> str:
+    """Return the body when ``expr`` is exactly one parenthesized group."""
+    expr = expr.strip()
+    if not (expr.startswith("(") and expr.endswith(")")):
+        return expr
+    depth = 0
+    for index, char in enumerate(expr):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0 and index != len(expr) - 1:
+                # The first closing paren ends an inner group, not the whole.
+                return expr
+    return expr[1:-1].strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -157,11 +262,25 @@ class TestFreshnessPlumbing:
         assert step["id"] == "freshness"
 
     def test_freshness_emits_stale_output(self):
-        step = next(
-            s for s in _build_steps() if s.get("name") == "Check S3 parquet freshness"
-        )
-        assert "stale=" in step["run"]
-        assert "GITHUB_OUTPUT" in step["run"]
+        """`stale` reaches GITHUB_OUTPUT through the same printf redirect.
+
+        Proving both tokens exist is not enough: the name must be written by a
+        single ``printf … >> "$GITHUB_OUTPUT"`` line, not logged to stdout and
+        disconnected from the output file.
+        """
+        run = _probe_step()["run"]
+        writers = [
+            line.strip()
+            for line in run.splitlines()
+            if not line.lstrip().startswith("#")
+            and re.search(r"""\bprintf\s+['"]stale=%s""", line)
+        ]
+        assert len(writers) == 1, writers
+        assert re.fullmatch(
+            r"""printf\s+['"]stale=%s\\n['"]\s+["']?\$1["']?\s*>>\s*"""
+            r"""["']?\$\{?GITHUB_OUTPUT\}?["']?""",
+            writers[0],
+        ), writers[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -192,13 +311,27 @@ class TestPublishGate:
 # --------------------------------------------------------------------------- #
 class TestDeployGate:
     def test_deploy_requires_main_branch(self):
-        deploy_if = _load()["jobs"]["deploy"]["if"]
-        assert "github.ref == 'refs/heads/main'" in deploy_if
+        condition = " ".join(_load()["jobs"]["deploy"]["if"].split())
+        assert _split_top_level(condition, "&&")[0] == "github.ref == 'refs/heads/main'"
 
     def test_deploy_gate_mirrors_publish_gate_via_needs_output(self):
-        deploy_if = _load()["jobs"]["deploy"]["if"]
-        assert "github.event_name != 'schedule'" in deploy_if
-        assert "needs.build.outputs.stale == 'true'" in deploy_if
+        """`main && (event != schedule || stale)` — ANDed and grouped.
+
+        Flipping the top-level ``&&`` to ``||`` would deploy off-main. Dropping
+        the parentheses changes the meaning to ``main && event != schedule ||
+        stale``, which deploys a scheduled run even when the build was skipped.
+        """
+        condition = " ".join(_load()["jobs"]["deploy"]["if"].split())
+        # No top-level OR: the schedule alternative must sit inside the group.
+        assert len(_split_top_level(condition, "||")) == 1, condition
+        branches = _split_top_level(condition, "&&")
+        assert len(branches) == 2, condition
+        schedule_skip = _strip_outer_parens(branches[1])
+        assert schedule_skip != branches[1], "schedule skip must stay parenthesized"
+        assert _split_top_level(schedule_skip, "||") == [
+            "github.event_name != 'schedule'",
+            "needs.build.outputs.stale == 'true'",
+        ], condition
 
     def test_deploy_needs_build(self):
         deploy = _load()["jobs"]["deploy"]
@@ -217,25 +350,45 @@ class TestProbeIsReadOnly:
     """
 
     def test_probe_has_no_write_commands(self):
-        run = _probe_step()["run"]
-        for command in (
-            "put-object",
-            "copy-object",
-            "delete-object",
-            "s3 cp",
-            "s3 mv",
-            "s3 sync",
-        ):
-            assert command not in run, command
+        assert _s3_write_commands(_probe_step()["run"]) == []
 
     def test_only_post_deploy_step_writes_the_marker(self):
-        """Exactly one marker write in the workflow, inside record-freshness."""
+        """Exactly one S3 mutation in the workflow, inside record-freshness.
+
+        Broadened beyond `put-object`: advancing the marker with `s3 cp` /
+        `s3 sync`, or deleting it with `s3 rm` / `delete-object`, breaks the same
+        post-deploy-only contract. The local `mv -f` in the assemble step is
+        not an `s3 mv`.
+        """
         writes = []
         for job_name, job in _load()["jobs"].items():
             for step in job.get("steps", []):
-                if "put-object" in step.get("run", ""):
+                if _s3_write_commands(step.get("run", "")):
                     writes.append((job_name, step.get("name")))
         assert writes == [("record-freshness", "Record parquet freshness fingerprint")]
+
+    def test_s3_rm_counts_as_a_bucket_mutation(self):
+        """`aws s3 rm` removes marker/parquet state just like delete-object."""
+        assert "s3 rm" in _s3_write_commands("aws s3 rm s3://bucket/wrm/key")
+
+    def test_duckdb_copy_to_s3_counts_as_a_bucket_mutation(self):
+        """A credentialed SQL COPY escapes an AWS-CLI-verb-only scan."""
+        sql = "COPY (SELECT 1) TO 's3://bucket/wrm/x.parquet' (FORMAT PARQUET);"
+        assert _s3_write_commands(sql) == ["duckdb copy to s3"]
+
+    def test_duckdb_read_from_s3_is_not_a_mutation(self):
+        sql = "SELECT * FROM read_parquet('s3://bucket/wrm/x.parquet');"
+        assert _s3_write_commands(sql) == []
+
+    def test_trailing_comment_is_not_a_command(self):
+        """Inline prose must not satisfy the write scan (verified false positive)."""
+        run = "echo done  # aws s3 cp local s3://bucket/key"
+        assert _s3_write_commands(run) == []
+
+    def test_hash_in_parameter_expansion_survives_comment_stripping(self):
+        """`${VAR#prefix}` is not a comment, so the real command is still seen."""
+        run = 'URL="${BASE#https://}"; aws s3 cp local s3://bucket/key'
+        assert _s3_write_commands(run) == ["s3 cp"]
 
     def test_probe_still_reads_previous_marker(self):
         run = _probe_step()["run"]
@@ -319,8 +472,47 @@ class TestRecordFreshnessJob:
         run = _record_step()["run"]
         assert "put-object" in run
         assert "MARKER_KEY" in run
-        # Recomputes after the deploy rather than reusing the build probe value.
-        assert "fingerprint" in run and "NEW_FP" in run
+
+    def test_record_step_recomputes_fingerprint_before_guard_and_write(self):
+        """One assignment only: guard and marker read the recomputed value.
+
+        A bypass could recompute into ``NEW_FP`` and then overwrite it with
+        ``NEW_FP="$BUILD_FP"`` before the guard, turning the comparison into a
+        tautology that marks changed parquet as published. Exactly one
+        assignment (the ``fingerprint()`` recompute) rules that out.
+        """
+        code = _shell_code(_record_step()["run"])
+        recompute = re.search(r"""NEW_FP=(["']?)\$\(\s*fingerprint\s*\)\1""", code)
+        assert recompute, "recorder must recompute NEW_FP from fingerprint()"
+        assignments = _var_assignments(code, "NEW_FP")
+        assert len(assignments) == 1, [m.group(0) for m in assignments]
+        assert assignments[0].start() == recompute.start()
+        # BUILD_FP is a needs output supplied via env; reassigning it in-script
+        # could also make the guard a tautology.
+        assert _var_assignments(code, "BUILD_FP") == []
+        guard = re.search(r'"?\$NEW_FP"?\s*!=\s*"?\$BUILD_FP"?', code)
+        assert guard, "recorder must compare NEW_FP with BUILD_FP"
+        marker = re.search(r"\bs3api\s+put-object\b", code)
+        assert marker, "recorder must write the marker with s3api put-object"
+        assert recompute.start() < guard.start() < marker.start()
+
+    @pytest.mark.parametrize(
+        "bypass",
+        [
+            'NEW_FP="$BUILD_FP"',
+            'export NEW_FP="$BUILD_FP"',
+            'NEW_FP+="$BUILD_FP"',
+        ],
+    )
+    def test_new_fp_reassignment_bypass_is_detected(self, bypass):
+        """Pins the detector to the reported bypass, not just the live script."""
+        code = 'if ! NEW_FP="$(fingerprint)"; then exit 0; fi\n' + bypass + "\n"
+        assert len(_var_assignments(code, "NEW_FP")) == 2
+
+    def test_build_fp_reassignment_bypass_is_detected(self):
+        """Overwriting BUILD_FP would also make the mismatch guard a no-op."""
+        code = 'NEW_FP="$(fingerprint)"\nBUILD_FP="$NEW_FP"\n'
+        assert len(_var_assignments(code, "BUILD_FP")) == 1
 
     def test_record_step_receives_build_fingerprint_env(self):
         """The build fingerprint arrives as a non-secret needs output."""
