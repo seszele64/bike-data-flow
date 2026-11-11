@@ -14,13 +14,22 @@ empty ends up with a usable snapshot even if the S3 upload later fails; it is
 replaced atomically (sibling temp file + ``os.replace``) so READ_ONLY readers
 only ever see the previous snapshot or the complete new one.
 
+After both parquet objects are uploaded, a deterministic content fingerprint
+manifest is written to ``wrm/dataset_manifest.json``: the SHA256 of the
+exported chart values plus row counts/keys. GitHub Pages can compare that
+``data_hash`` and rebuild only when the chart data actually changed.
+
 Credentials come exclusively from config/env names (``S3_*``/``HETZNER_*`` in
 ``config.py``) — nothing is hardcoded here, nothing is persisted into the
 local file, and no credential value is ever logged.
 """
 
+import hashlib
+import json
 import os
 import subprocess
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import duckdb
 from dagster import AssetExecutionContext, MaterializeResult, asset
@@ -96,6 +105,40 @@ GROUP BY g.min_lat, g.min_lon, g.lat_delta, g.lon_delta, c.i_lat, c.i_lon;
 # `FROM stations_latest` / `FROM density_grid` against it).
 _SNAPSHOT_TABLES = ('stations_latest', 'density_grid')
 
+# Deterministic content-fingerprint manifest (stable, overwritten each run).
+# ``generated_at`` is metadata only and never part of the hash.
+MANIFEST_EXPORT_KEY = 'wrm/dataset_manifest.json'
+MANIFEST_SCHEMA_VERSION = 1
+DATA_FINGERPRINT_VERSION = 1
+
+# Stable columns fingerprinted per exported table. They mirror the projections
+# of the two snapshot SQL statements above: every projected column is chart
+# data, and none of them is a generated time/provenance field.
+_STATIONS_FINGERPRINT_COLUMNS = (
+    'station_id',
+    'name',
+    'bikes',
+    'spaces',
+    'total_docks',
+    'installed',
+    'lat',
+    'lon',
+    'timestamp',
+)
+_DENSITY_FINGERPRINT_COLUMNS = (
+    'grid_lat',
+    'grid_lon',
+    'bike_count',
+    'station_count',
+    'density_per_1000m2',
+)
+
+# (table, bucket-relative export key, fingerprinted columns) in COPY order.
+_EXPORT_FINGERPRINT_SPECS = (
+    ('stations_latest', STATIONS_EXPORT_KEY, _STATIONS_FINGERPRINT_COLUMNS),
+    ('density_grid', DENSITY_EXPORT_KEY, _DENSITY_FINGERPRINT_COLUMNS),
+)
+
 
 def _quote_sql(value) -> str:
     """Inline a value into a single-quoted DuckDB literal (path/option safe)."""
@@ -164,20 +207,116 @@ def _write_local_snapshot(conn) -> str:
     return target
 
 
+def _canonical_value(value):
+    """Type-explicit, JSON-serializable rendering of one DuckDB scalar.
+
+    Wrapping temporal/binary/decimal values avoids collisions with plain
+    strings, and keeping Python's ``repr``-based float formatting makes the
+    same numeric value always serialize (and therefore hash) identically.
+    """
+    if isinstance(value, (datetime, date)):
+        return {'$t': value.isoformat()}
+    if isinstance(value, Decimal):
+        return {'$d': format(value, 'f')}
+    if isinstance(value, bytes):
+        return {'$b': value.hex()}
+    return value
+
+
+def _table_fingerprint(conn, table: str, columns: tuple[str, ...]):
+    """SHA256 over ``table``'s rows in a total, deterministic order.
+
+    Ordering by every fingerprinted column (``NULLS LAST``) makes the hash
+    independent of DuckDB's internal row/grouping order, so the same exported
+    values always produce the same digest. Returns ``(hexdigest, row_count)``.
+    """
+    column_sql = ', '.join(columns)
+    order_sql = ', '.join(f'{column} ASC NULLS LAST' for column in columns)
+    rows = conn.execute(
+        f'SELECT {column_sql} FROM {table} ORDER BY {order_sql};'
+    ).fetchall()
+
+    hasher = hashlib.sha256()
+    header = {
+        'fingerprint_version': DATA_FINGERPRINT_VERSION,
+        'table': table,
+        'columns': list(columns),
+    }
+    hasher.update(
+        json.dumps(header, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    )
+    hasher.update(b'\n')
+    for row in rows:
+        hasher.update(
+            json.dumps(
+                [_canonical_value(value) for value in row],
+                ensure_ascii=False,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        )
+        hasher.update(b'\n')
+    return hasher.hexdigest(), len(rows)
+
+
+def _build_manifest(fingerprints, generated_at: str) -> dict:
+    """Assemble the manifest payload from per-table ``(…, hash, rows)`` tuples."""
+    combined = hashlib.sha256()
+    for table, _export_key, _columns, table_hash, row_count in fingerprints:
+        combined.update(f'{table}\t{table_hash}\t{row_count}\n'.encode('utf-8'))
+
+    return {
+        'schema_version': MANIFEST_SCHEMA_VERSION,
+        'fingerprint_version': DATA_FINGERPRINT_VERSION,
+        'data_hash': combined.hexdigest(),
+        'generated_at': generated_at,
+        'export_keys': [STATIONS_EXPORT_KEY, DENSITY_EXPORT_KEY],
+        'tables': {
+            table: {
+                'export_key': export_key,
+                'row_count': row_count,
+                'columns': list(columns),
+                'table_hash': table_hash,
+            }
+            for table, export_key, columns, table_hash, row_count in fingerprints
+        },
+    }
+
+
+def _upload_manifest(context, manifest: dict) -> None:
+    """PUT the manifest to S3; any client error propagates and fails the run.
+
+    ``s3_resource`` is declared required on the asset, so a missing resource
+    fails when the asset context is bound and an upload error fails the
+    materialization — the manifest is never silently skipped.
+    """
+    body = json.dumps(
+        manifest, sort_keys=True, separators=(',', ':')
+    ).encode('utf-8') + b'\n'
+    context.resources.s3_resource.get_client().put_object(
+        Bucket=BUCKET_NAME,
+        Key=MANIFEST_EXPORT_KEY,
+        Body=body,
+        ContentType='application/json',
+    )
+
+
 @asset(
     name="evidence_data_snapshot",
     compute_kind="duckdb",
     group_name="dashboard",
     deps=[create_duckdb_enhanced_views],
+    required_resource_keys={"s3_resource"},
 )
 def evidence_data_snapshot(context: AssetExecutionContext) -> MaterializeResult:
     """Write the analytics TEMP tables to the local snapshot and to S3.
 
     Local first (``wrm.duckdb``, atomic overwrite, no credentials involved),
     then the two ``s3://<BUCKET_NAME>/wrm/*.parquet`` objects via httpfs
-    ``COPY TO``, so a broken upstream — or a failing bucket — never leaves a
-    truncated local file behind. Credentials are read from config env names
-    only and are never written to the log stream or the snapshot file.
+    ``COPY TO``, then the content-fingerprint manifest
+    (``wrm/dataset_manifest.json``) built from the same exported values, so a
+    broken upstream — or a failing bucket — never leaves a truncated local
+    file behind. Credentials are read from config env names only and are never
+    written to the log stream or the snapshot file.
     """
     if not BUCKET_NAME:
         raise ValueError(
@@ -214,6 +353,13 @@ def evidence_data_snapshot(context: AssetExecutionContext) -> MaterializeResult:
         stations = conn.execute("SELECT COUNT(*) FROM stations_latest;").fetchone()[0]
         cells = conn.execute("SELECT COUNT(*) FROM density_grid;").fetchone()[0]
 
+        # Fingerprint the exported chart values (stable columns only) before
+        # any write: a failed hash query must not leave exports behind.
+        fingerprints = []
+        for table, export_key, columns in _EXPORT_FINGERPRINT_SPECS:
+            table_hash, row_count = _table_fingerprint(conn, table, columns)
+            fingerprints.append((table, export_key, columns, table_hash, row_count))
+
         # Local snapshot first: it needs no credentials, so a clean checkout
         # (bucket configured but still empty) still ends up with both tables
         # even if the uploads below fail.
@@ -226,11 +372,22 @@ def evidence_data_snapshot(context: AssetExecutionContext) -> MaterializeResult:
             f"COPY density_grid TO '{_quote_sql(density_key)}' (FORMAT parquet);"
         )
 
+    # Manifest strictly after BOTH parquet COPYs, so a reader can never see a
+    # hash that promises data the bucket does not hold yet.
+    manifest = _build_manifest(
+        fingerprints, datetime.now(timezone.utc).isoformat()
+    )
+    manifest_key = f"s3://{BUCKET_NAME}/{MANIFEST_EXPORT_KEY}"
+    _upload_manifest(context, manifest)
+
     context.log.info(
         f"Exported dashboard snapshot to {stations_key} and {density_key} "
         f"and wrote local {snapshot_path} "
-        f"({stations} stations, {cells} grid cells)"
+        f"({stations} stations, {cells} grid cells); "
+        f"data_hash={manifest['data_hash']}"
     )
+    context.log.info(f"Wrote dataset manifest to {manifest_key}")
+
     return MaterializeResult(
         metadata={
             "bucket": BUCKET_NAME,
@@ -239,6 +396,9 @@ def evidence_data_snapshot(context: AssetExecutionContext) -> MaterializeResult:
             "stations_latest_rows": stations,
             "density_grid_rows": cells,
             "local_snapshot_path": snapshot_path,
+            "data_hash": manifest["data_hash"],
+            "dataset_manifest_key": manifest_key,
+            "dataset_manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         }
     )
 

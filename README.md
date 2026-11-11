@@ -100,6 +100,22 @@ The pipeline features an intelligent sensor system that automatically detects ne
 - **Error Resilience**: Continues monitoring even if individual runs fail
 - **State Management**: Maintains processing history via cursor mechanism
 
+### **Scheduled Refresh**
+
+Two Dagster schedules complement the sensor path
+([`definitions.py`](wrm_pipeline/wrm_pipeline/definitions.py)):
+
+- **`latest_refresh`** (`*/15 * * * *`, UTC) — runs the unpartitioned
+  raw fetch → latest processed → latest enhanced → DuckDB views → dashboard
+  snapshot chain, rewriting the published `wrm/stations_latest.parquet` and
+  `wrm/density_grid.parquet` every 15 minutes.
+- **`daily`** (`0 5 * * *`, UTC) — runs the partitioned archive job for
+  yesterday's partition; it does not write the two published dashboard Parquet
+  objects.
+
+The Evidence publish workflow polls seven minutes after each `latest_refresh`
+tick; see the [Dashboard Publish Pipeline](#dashboard-publish-pipeline-pagesyml).
+
 ## 🔄 Data Processing Flow
 
 ### 1. **Data Ingestion**
@@ -223,21 +239,31 @@ fingerprint that the next scheduled run compares against.
 | Push to `main` | `push` | Always | Any merge to `main` redeploys. |
 | Manual run | `workflow_dispatch` | Always | Run from the Actions tab. |
 | Parquet refresh | `repository_dispatch` (`wrm-parquet-updated`) | Always | Event-driven rebuild (see contract below). |
-| Daily schedule | `schedule` (`30 5 * * *`) | Only when data changed | Skipped when the Parquet fingerprint matches the marker written by the last successful deploy. |
+| 15-minute schedule | `schedule` (`7,22,37,52 * * * *`) | Only when data changed | Polls seven minutes after each `latest_refresh` tick; skipped when the Parquet fingerprint matches the marker written by the last successful deploy. |
 
-The scheduled run fires at **05:30 UTC**, 30 minutes after the Dagster daily
-transform (`0 5 * * *`, [`definitions.py`](wrm_pipeline/wrm_pipeline/definitions.py))
-has written the day's Parquet, so the publish normally runs after the transform
-has finished. The 30-minute gap is not a guarantee: a transform that runs late
-can still overlap a scheduled publish.
+The scheduled poll fires at minutes **07, 22, 37 and 52 of every hour (UTC)** —
+seven minutes after each `latest_refresh` tick (`*/15 * * * *`,
+[`definitions.py`](wrm_pipeline/wrm_pipeline/definitions.py)), which runs the
+raw fetch → latest processed → latest enhanced → DuckDB views →
+`evidence_data_snapshot` chain that rewrites `wrm/stations_latest.parquet` and
+`wrm/density_grid.parquet`. The seven-minute offset lets the S3 writes settle,
+but it is **best-effort**: a slow refresh can still overlap a poll, in which
+case the next poll picks up the changed Parquet. The cron schedule is a
+fallback, not the primary path — `repository_dispatch` (below) is the
+event-driven trigger and publishes as soon as O2 announces fresh Parquet.
+
+The separate daily **archive** schedule (`daily`, `0 5 * * *`, UTC) materializes
+the day-partitioned history (`processed_all` / `enhanced_all`); it does **not**
+write the two published dashboard Parquet objects, so it is unrelated to the
+Pages poll cadence.
 
 Because the marker is only written after a successful deploy, a scheduled run
 whose build or deploy failed (or was skipped) leaves the marker untouched and
-retries the publish on the next tick. Unchanged Parquet with a recorded marker
+retries the publish on the next poll. Unchanged Parquet with a recorded marker
 skips the artifact-producing `Assemble` → `Fetch sources` → `Clean` → `Build` →
-`Upload` steps, the deploy **and** the marker write. A no-op day therefore does
-no build/upload or deploy work, but the checkout, Node.js setup, `npm ci` and
-freshness probe still run before the skip is decided.
+`Upload` steps, the deploy **and** the marker write. A poll with unchanged
+Parquet therefore does no build/upload or deploy work, but the checkout, Node.js
+setup, `npm ci` and freshness probe still run before the skip is decided.
 
 #### Freshness gate (skip when unchanged)
 
@@ -321,7 +347,8 @@ if: ${{ !cancelled() && needs.build.result == 'success' && needs.deploy.result =
 
 When O2's Parquet publisher lands fresh `stations_latest` / `density_grid`
 Parquet in S3 it may rebuild the dashboard immediately instead of waiting for
-the 05:30 tick by sending a repository dispatch to this repository:
+the next scheduled poll (at most ~15 minutes away) by sending a repository
+dispatch to this repository:
 
 ```jsonc
 // POST /repos/seszele64/bike-data-flow/dispatches

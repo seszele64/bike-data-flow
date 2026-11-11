@@ -11,8 +11,9 @@ on:
   repository_dispatch:
     types: [wrm-parquet-updated]
   schedule:
-    # 30 min after the Dagster daily transform (0 5 * * * UTC) so parquet is fresh.
-    - cron: "30 5 * * *"
+    # Poll seven minutes after each Dagster 15-minute tick (latest_refresh runs
+    # `*/15 * * * *` UTC) so the S3 parquet writes have settled.
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
   contents: read

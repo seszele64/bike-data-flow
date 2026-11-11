@@ -46,6 +46,8 @@ OLDER_TS = datetime(2026, 9, 19, 8, 0, tzinfo=timezone.utc)
 LATEST_TS = datetime(2026, 9, 20, 10, 30, tzinfo=timezone.utc)
 LATEST_ISO = "2026-09-20T10:30:00"
 OLD_CURSOR = "2026-09-18T00:00:00"
+# Cursor equal to OLD_FILE's timestamp: only strictly-newer files count as new.
+OLDER_CURSOR = "2026-09-19T08:00:00"
 
 # (key, LastModified) pairs mimicking S3 list_objects_v2 Contents entries.
 OLD_FILE = (f"{RAW_PREFIX}dt=2026-09-19/old.txt", OLDER_TS)
@@ -83,6 +85,33 @@ def _skip_message(result):
     dagster version; both carry the message under ``skip_message``.
     """
     return getattr(result, "skip_message", None)
+
+
+def _evaluate_pages(pages, cursor=None):
+    """Evaluate one tick against a fake S3 whose listing spans ``pages``.
+
+    ``side_effect`` is exhausted after ``len(pages)`` calls, so a pagination
+    loop that never terminates raises instead of hanging the suite.
+    """
+    fake_s3 = Mock(name="s3_resource")
+    fake_s3.list_objects_v2.side_effect = list(pages)
+    context = build_sensor_context(
+        cursor=cursor,
+        resources={"s3_resource": fake_s3},
+        repository_def=REPO_DEF,
+    )
+    return wrm_stations_raw_data_sensor.evaluate_tick(context), fake_s3
+
+
+def _page(entries, *, truncated=False, token=None):
+    """Build one ``list_objects_v2`` page from (key, ts) pairs."""
+    page = {
+        "Contents": [{"Key": key, "LastModified": ts} for key, ts in entries],
+        "IsTruncated": truncated,
+    }
+    if token:
+        page["NextContinuationToken"] = token
+    return page
 
 
 class TestSensorContract:
@@ -166,3 +195,72 @@ class TestSkipReasons:
         result = _evaluate([OLD_FILE, NEW_FILE_P20], cursor=LATEST_ISO)
         assert result.run_requests == []
         assert _skip_message(result) == "No new raw data files found"
+
+
+class TestPagination:
+    """The sensor must page through S3 before deciding what is new.
+
+    ``list_objects_v2`` caps a response at 1000 keys, so a newer raw file on a
+    later page must still be detected; metadata (``LastModified``) used for
+    sorting and partitioning must survive the concatenation of pages.
+    """
+
+    def test_newest_file_on_later_page_is_processed(self):
+        result, fake_s3 = _evaluate_pages(
+            [
+                _page([OLD_FILE], truncated=True, token="token-2"),
+                _page([NEW_FILE_P20]),
+            ],
+            cursor=OLDER_CURSOR,
+        )
+
+        assert [rr.partition_key for rr in result.run_requests] == ["2026-09-20"]
+        assert result.run_requests[0].run_key == f"2026-09-20:{LATEST_ISO}"
+        assert result.cursor == LATEST_ISO
+        assert fake_s3.list_objects_v2.call_count == 2
+        second_call = fake_s3.list_objects_v2.call_args_list[1]
+        assert second_call.kwargs["ContinuationToken"] == "token-2"
+
+    def test_truncated_page_without_token_terminates_and_still_emits(self):
+        result, fake_s3 = _evaluate_pages(
+            [
+                _page([OLD_FILE], truncated=True, token="token-2"),
+                # Truncated but token missing: stop paging, keep what we have.
+                _page([NEW_FILE_P20], truncated=True),
+            ],
+            cursor=OLDER_CURSOR,
+        )
+
+        assert fake_s3.list_objects_v2.call_count == 2
+        assert _skip_message(result) is None
+        assert [rr.partition_key for rr in result.run_requests] == ["2026-09-20"]
+        assert result.cursor == LATEST_ISO
+
+    def test_first_tick_adopts_latest_across_all_pages(self):
+        result, fake_s3 = _evaluate_pages(
+            [
+                _page([OLD_FILE], truncated=True, token="token-2"),
+                _page([NEW_FILE_P20]),
+            ],
+            cursor=None,
+        )
+
+        assert result.run_requests == []
+        assert result.cursor == LATEST_ISO
+        assert fake_s3.list_objects_v2.call_count == 2
+
+    def test_single_page_never_sends_a_continuation_token(self):
+        result, fake_s3 = _evaluate_pages(
+            [_page([OLD_FILE, NEW_FILE_P20])], cursor=OLDER_CURSOR
+        )
+
+        assert [rr.partition_key for rr in result.run_requests] == ["2026-09-20"]
+        assert fake_s3.list_objects_v2.call_count == 1
+        assert "ContinuationToken" not in fake_s3.list_objects_v2.call_args.kwargs
+
+    def test_empty_page_payload_skips_as_no_raw_files(self):
+        result, fake_s3 = _evaluate_pages([{"IsTruncated": False}], cursor=None)
+
+        assert result.run_requests == []
+        assert _skip_message(result) == "No raw data files found"
+        assert fake_s3.list_objects_v2.call_count == 1

@@ -434,8 +434,10 @@ class TestBuildCommandContract:
         with open(os.path.join(repo_root, "dashboard", "package.json")) as fh:
             pkg = json.load(fh)
         # basePath /bike-data-flow: build outputs to ./build/bike-data-flow.
+        # The output dir is cleared first so stale assets cannot leak into a
+        # deployed Pages build (see commit 92ea723).
         assert (
-            pkg["scripts"]["build"]
-            == "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build"
+            pkg["scripts"]["build"] == "rm -rf ./build/bike-data-flow"
+            " && EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build"
         )
         assert "evidence build" in pkg["scripts"]["build"]
