@@ -3,25 +3,35 @@
 These assertions are locked against the recorded artifacts on disk:
 
 - ``dashboard/package.json`` / ``dashboard/package-lock.json`` — the Evidence
-  toolkit scaffold: ``@evidence-dev/evidence`` 40.1.8 (resolved) with the
-  ``^4.0.13`` / ``^5.4.2`` / ``^2.0.1`` / ``^40.1.8`` / ``^3.1.4`` / ``^5.0.0``
-  devDependency pins (B4.1 adds the ``@evidence-dev/duckdb`` datasource plugin;
-  B5.1 adds the ``@evidence-dev/tailwind`` styling plugin; B6.6 adds the
-  ``@evidence-dev/component-utilities`` + ``@evidence-dev/core-components``
-  component libraries). Invariant: every pinned devDependency has a resolved
-  ``node_modules/`` entry in the lockfile — tailwind 3.1.4 (entry at
-  lockfile line 1904), core-components 5.4.2, component-utilities 4.0.13,
-  duckdb 2.0.1 — and the full tree is recorded (885 entries as of this
-  step), plus node >= 18 and the dev/build/sources scripts.
+  toolkit scaffold pins exact devDependency versions (no caret ranges unless
+  the pin itself is one): ``@evidence-dev/evidence`` 40.1.8,
+  ``@evidence-dev/component-utilities`` 4.0.13, ``@evidence-dev/core-components``
+  5.4.2, ``@evidence-dev/duckdb`` 2.0.1, ``@evidence-dev/tailwind`` 3.1.4, and
+  ``typescript`` ^5.0.0 (B4.1 adds the ``@evidence-dev/duckdb`` datasource
+  plugin; B5.1 adds the ``@evidence-dev/tailwind`` styling plugin; B6.6 adds
+  the component libraries). Invariant: the package devDependencies equal the
+  lockfile root entry (``packages[""]``) exactly, and every pin has a
+  resolved ``node_modules/`` entry in the lockfile (typescript resolves to
+  5.4.2); the full tree is recorded (885 entries as of this step). Node
+  engine floor is >= 18 and the ``dev`` / ``build`` / ``sources`` scripts are
+  locked exactly, including the build's clean-before-build
+  ``rm -rf ./build/bike-data-flow`` step.
 - ``.gitignore`` — Node/SvelteKit build artifacts under ``dashboard/`` must be
   ignored so the 400+ MB ``node_modules`` tree never enters version control.
+  Generated DuckDB snapshots (``*.duckdb`` / ``*.duckdb.wal``) are ignored as
+  well.
 - ``dashboard/sources/wrm/*.sql`` — the dual-write local-first contract: the
   two ``wrm`` source queries read the local ``wrm.duckdb`` snapshot via
   ``FROM main.*`` (written locally by ``evidence_data_snapshot`` and
-  mirrored to S3 parquet). The local
-  ``dashboard/sources/wrm/wrm.duckdb`` file exists as a gitignored build
-  artifact; the column projections below lock the SELECT lists of those
-  queries.
+  mirrored to S3 parquet). The column projections below lock the SELECT lists
+  of those queries.
+
+The DuckDB snapshot itself is a generated, gitignored build artifact and is
+NOT required to exist for these tests: ``evidence_data_snapshot`` writes it at
+``SNAPSHOT_PATH``, and its materialization behavior is covered by
+``test_evidence_data_snapshot.py``. Here we only assert the path/connection
+contract (``SNAPSHOT_PATH``, ``connection.yaml`` filename, gitignore), never
+file presence — so these tests never create or require a ``.duckdb`` file.
 
 No network and no Node execution: the lockfile is parsed as JSON, and the
 ignore behavior is verified through ``git check-ignore``.
@@ -96,27 +106,37 @@ class TestEvidenceScaffoldPackageJson:
         # deployment.basePath /bike-data-flow.
         assert package_json["scripts"] == {
             "dev": "evidence dev",
-            "build": "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build",
+            "build": (
+                "rm -rf ./build/bike-data-flow && "
+                "EVIDENCE_BUILD_DIR=./build/bike-data-flow evidence build"
+            ),
             "sources": "evidence sources",
         }
 
     def test_dev_dependency_pins(self, package_json):
-        # B4.1: @evidence-dev/duckdb ^2.0.1 provides the `duckdb` source type
+        # B4.1: @evidence-dev/duckdb 2.0.1 provides the `duckdb` source type
         # used by dashboard/sources/wrm/ (registered in evidence.config.yaml
-        # at B4.2). B5.1: @evidence-dev/tailwind ^3.1.4 provides the styling
-        # plugin. B6.6: @evidence-dev/component-utilities ^4.0.13 +
-        # @evidence-dev/core-components ^5.4.2 provide the component library
-        # (registered in evidence.config.yaml at B6.7). All six pins are
+        # at B4.2). B5.1: @evidence-dev/tailwind 3.1.4 provides the styling
+        # plugin. B6.6: @evidence-dev/component-utilities 4.0.13 +
+        # @evidence-dev/core-components 5.4.2 provide the component library
+        # (registered in evidence.config.yaml at B6.7). Pins are exact unless
+        # they are caret ranges by intent (typescript ^5.0.0); all six are
         # resolved as node_modules/ lockfile entries — see
         # TestEvidenceLockfile.
         assert package_json["devDependencies"] == {
-            "@evidence-dev/component-utilities": "^4.0.13",
-            "@evidence-dev/core-components": "^5.4.2",
-            "@evidence-dev/duckdb": "^2.0.1",
-            "@evidence-dev/evidence": "^40.1.8",
-            "@evidence-dev/tailwind": "^3.1.4",
+            "@evidence-dev/component-utilities": "4.0.13",
+            "@evidence-dev/core-components": "5.4.2",
+            "@evidence-dev/duckdb": "2.0.1",
+            "@evidence-dev/evidence": "40.1.8",
+            "@evidence-dev/tailwind": "3.1.4",
             "typescript": "^5.0.0",
         }
+
+    def test_dev_dependencies_match_lockfile_root(self, package_json):
+        """package.json and the lockfile root must not drift apart."""
+        with open(os.path.join(DASHBOARD_DIR, "package-lock.json")) as fh:
+            lockfile_root = json.load(fh)["packages"][""]
+        assert package_json["devDependencies"] == lockfile_root["devDependencies"]
 
 
 class TestEvidenceLockfile:
@@ -200,16 +220,20 @@ class TestEvidenceGitignore:
 class TestParquetSourcesArtifact:
     """The dual-write local-first contract: .sql sources read FROM main.*.
 
-    The local ``dashboard/sources/wrm/wrm.duckdb`` snapshot exists
-    (gitignored build artifact written by ``evidence_data_snapshot`` alongside
-    the S3 parquet mirror). This class locks the query text — ``FROM
-    main.stations_latest`` / ``FROM main.density_grid`` — the expected SELECT
+    ``dashboard/sources/wrm/wrm.duckdb`` is a generated, gitignored build
+    artifact written by ``evidence_data_snapshot`` alongside the S3 parquet
+    mirror; its materialization is covered by
+    ``test_evidence_data_snapshot.py``. This class locks the *contract* without
+    requiring the file to exist: the generator's ``SNAPSHOT_PATH``, the
+    ``connection.yaml`` filename, gitignore coverage, the query text (``FROM
+    main.stations_latest`` / ``FROM main.density_grid``), the expected SELECT
     projections (mirroring the STUB_* column contracts), and credential-free
     sources (no keys/endpoints inlined; the local handle is allowed).
     """
 
     STATIONS_SQL = os.path.join(DASHBOARD_DIR, "sources", "wrm", "stations_latest.sql")
     DENSITY_SQL = os.path.join(DASHBOARD_DIR, "sources", "wrm", "density_grid.sql")
+    CONNECTION_YAML = os.path.join(DASHBOARD_DIR, "sources", "wrm", "connection.yaml")
     SNAPSHOT_DUCKDB = os.path.join(DASHBOARD_DIR, "sources", "wrm", "wrm.duckdb")
     EXPECTED_STATIONS_TABLE = "main.stations_latest"
     EXPECTED_DENSITY_TABLE = "main.density_grid"
@@ -218,9 +242,27 @@ class TestParquetSourcesArtifact:
         assert os.path.isfile(self.STATIONS_SQL)
         assert os.path.isfile(self.DENSITY_SQL)
 
-    def test_local_snapshot_exists(self):
-        """Dual-write keeps a gitignored local wrm.duckdb for Evidence builds."""
-        assert os.path.isfile(self.SNAPSHOT_DUCKDB)
+    def test_snapshot_path_matches_generator_target(self):
+        """The generator's SNAPSHOT_PATH is the file the sources read.
+
+        Existence is deliberately not asserted: the snapshot is gitignored and
+        created by ``evidence_data_snapshot``; these tests must not need (or
+        create) a DuckDB file.
+        """
+        from wrm_pipeline.assets import dashboard as dashboard_module
+
+        assert os.path.abspath(dashboard_module.SNAPSHOT_PATH) == os.path.abspath(
+            self.SNAPSHOT_DUCKDB
+        )
+        assert (
+            dashboard_module.evidence_data_snapshot.op.name == "evidence_data_snapshot"
+        )
+
+    def test_connection_yaml_targets_the_snapshot(self):
+        """The Evidence duckdb connector reads the same generated filename."""
+        with open(self.CONNECTION_YAML) as fh:
+            content = fh.read()
+        assert "filename: wrm.duckdb" in content
 
     def test_local_snapshot_is_gitignored(self):
         probe = os.path.join(REPO_ROOT, "dashboard", "sources", "wrm", "wrm.duckdb")

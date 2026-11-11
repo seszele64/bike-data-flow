@@ -2,11 +2,22 @@ from dagster import asset, AssetExecutionContext
 import duckdb
 import os
 from ...config import HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY, HETZNER_ENDPOINT_URL, BUCKET_NAME, WRM_STATIONS_S3_PREFIX, db_path
+from ..stations.latest_all import wrm_stations_enhanced_data_latest_asset
+
+
+def _sql_literal(value) -> str:
+    """Escape a value for inlining inside a single-quoted DuckDB literal."""
+    return str(value).replace("'", "''")
+
 
 @asset(
     name="duckdb_enhanced_views",
     compute_kind="duckdb",
-    group_name="analytics_views"
+    group_name="analytics_views",
+    # ``wrm_stations_latest`` reads the enhanced latest parquet, so ensure the
+    # producer is materialized first within a run/backfill. The archive views
+    # have no such edge because they read the daily partitions directly.
+    deps=[wrm_stations_enhanced_data_latest_asset],
 )
 def create_duckdb_enhanced_views(context: AssetExecutionContext) -> str:
     """Create DuckDB views for enhanced WRM stations data"""
@@ -39,28 +50,54 @@ def create_duckdb_enhanced_views(context: AssetExecutionContext) -> str:
         
         # Create the views directly here instead of importing
         s3_path = f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}enhanced/all/**/*.parquet"
+        # Stable, unpartitioned latest snapshot written by the ``*_latest``
+        # assets (mirrors ``latest_all.WRM_STATIONS_ENHANCED_LATEST_S3_KEY``).
+        latest_s3_path = (
+            f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}"
+            "enhanced/latest/all_enhanced_latest.parquet"
+        )
+        s3_path_sql = _sql_literal(s3_path)
+        latest_s3_path_sql = _sql_literal(latest_s3_path)
         context.log.info(f"S3 Path: {s3_path}")
+        context.log.info(f"Latest S3 Path: {latest_s3_path}")
         
         # Test S3 connection first
         try:
-            test_result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{s3_path}') LIMIT 1;").fetchone()
+            test_result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{s3_path_sql}') LIMIT 1;").fetchone()
             context.log.info(f"S3 connection test successful")
         except Exception as e:
             context.log.error(f"S3 connection test failed: {e}")
             # Try to list available files for debugging
             try:
                 list_path = f"s3://{BUCKET_NAME}/{WRM_STATIONS_S3_PREFIX}enhanced/all/"
-                files = conn.execute(f"SELECT * FROM glob('{list_path}*') LIMIT 10;").fetchall()
+                files = conn.execute(f"SELECT * FROM glob('{_sql_literal(list_path)}*') LIMIT 10;").fetchall()
                 context.log.info(f"Available files in {list_path}: {files}")
             except Exception as list_error:
                 context.log.error(f"Could not list files: {list_error}")
             raise
         
+        # Probe the latest snapshot but don't fail if it hasn't been written yet:
+        # views bind lazily, and a missing latest object should not block the
+        # historical archive views.
+        try:
+            latest_count = conn.execute(
+                f"SELECT COUNT(*) FROM read_parquet('{latest_s3_path_sql}') "
+                "WHERE record_type = 'station';"
+            ).fetchone()[0]
+            context.log.info(f"Latest station records available: {latest_count}")
+        except Exception as e:
+            context.log.warning(
+                f"Latest enhanced snapshot not readable yet ({latest_s3_path}): {e}. "
+                "View creation continues, but wrm_stations_latest stays empty/erroring "
+                "until wrm_stations_enhanced_data_latest is materialized (the 15-minute "
+                "refresh job writes enhanced/latest/all_enhanced_latest.parquet)."
+            )
+
         # Main enhanced data view
         view_sql = f"""
         CREATE OR REPLACE VIEW wrm_stations_enhanced_data AS
         SELECT *
-        FROM read_parquet('{s3_path}')
+        FROM read_parquet('{s3_path_sql}')
         ORDER BY date DESC, file_timestamp DESC, station_id;
         """
         conn.execute(view_sql)
@@ -80,9 +117,9 @@ def create_duckdb_enhanced_views(context: AssetExecutionContext) -> str:
         """)
         context.log.info("Created wrm_bikes_only view")
         
-        # Latest stations view
+        # Historical latest-station view: rank the full enhanced archive per station.
         conn.execute("""
-        CREATE OR REPLACE VIEW wrm_stations_latest AS
+        CREATE OR REPLACE VIEW wrm_stations_latest_history AS
         SELECT *
         FROM (
             SELECT *,
@@ -91,6 +128,17 @@ def create_duckdb_enhanced_views(context: AssetExecutionContext) -> str:
             WHERE record_type = 'station'
         ) t
         WHERE rn = 1;
+        """)
+        context.log.info("Created wrm_stations_latest_history view")
+
+        # Latest stations view: station rows from the stable, unpartitioned
+        # enhanced latest snapshot (one row per station).
+        conn.execute(f"""
+        CREATE OR REPLACE VIEW wrm_stations_latest AS
+        SELECT *
+        FROM read_parquet('{latest_s3_path_sql}')
+        WHERE record_type = 'station'
+        ORDER BY station_id;
         """)
         context.log.info("Created wrm_stations_latest view")
         

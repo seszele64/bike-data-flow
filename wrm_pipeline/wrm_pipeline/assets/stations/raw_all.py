@@ -52,6 +52,38 @@ class WRMAPIConfig:
 # Global config instance
 wrm_api_config = WRMAPIConfig()
 
+
+def _list_all_objects_v2(s3_client, bucket: str, prefix: str) -> List[dict]:
+    """Return every S3 object under ``prefix``, following continuation tokens.
+
+    ``list_objects_v2`` returns at most 1000 keys per response, so callers that
+    select the newest object must page through the full listing or they will
+    silently miss objects past the first page. Full object metadata (including
+    ``LastModified``) is preserved. Pagination stops when the response is not
+    truncated, or defensively when a truncated response omits a continuation
+    token (prevents an infinite loop).
+    """
+    objects: List[dict] = []
+    continuation_token = None
+
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": prefix}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        response = s3_client.list_objects_v2(**kwargs)
+        objects.extend(response.get("Contents", []))
+
+        if not response.get("IsTruncated"):
+            break
+
+        continuation_token = response.get("NextContinuationToken")
+        if not continuation_token:
+            break
+
+    return objects
+
+
 @asset(
     name="wrm_stations_raw_data",
     # No partitions_def here - it only fetches current data
@@ -92,15 +124,12 @@ def wrm_stations_raw_data_asset(context: AssetExecutionContext) -> str:
         raw_s3_prefix = f"{WRM_STATIONS_S3_PREFIX}raw/"
         
         try:
-            # List all files in the raw directory (across all date partitions)
-            response_list = s3_client.list_objects_v2(
-                Bucket=BUCKET_NAME,
-                Prefix=raw_s3_prefix
-            )
+            # List all files in the raw directory across every S3 page
+            all_objects = _list_all_objects_v2(s3_client, BUCKET_NAME, raw_s3_prefix)
             
-            if 'Contents' in response_list and response_list['Contents']:
+            if all_objects:
                 # Filter to only include .txt files (exclude directories)
-                txt_files = [obj for obj in response_list['Contents'] if obj['Key'].endswith('.txt')]
+                txt_files = [obj for obj in all_objects if obj['Key'].endswith('.txt')]
                 
                 if txt_files:
                     # Get the most recent file across all date partitions

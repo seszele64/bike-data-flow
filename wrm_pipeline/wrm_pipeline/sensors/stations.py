@@ -5,6 +5,38 @@ from dagster import sensor, SensorResult, RunRequest, SkipReason, SensorEvaluati
 from ..config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 from ..jobs.stations import wrm_stations_processing_job
 
+
+def _list_all_objects_v2(s3_client, bucket: str, prefix: str) -> list:
+    """Return every S3 object under ``prefix``, following continuation tokens.
+
+    ``list_objects_v2`` returns at most 1000 keys per response, so a sensor
+    that sorts by ``LastModified`` must page through the full listing or it
+    will silently miss files past the first page. Full object metadata
+    (including ``LastModified``) is preserved. Pagination stops when the
+    response is not truncated, or defensively when a truncated response omits
+    a continuation token (prevents an infinite loop).
+    """
+    objects = []
+    continuation_token = None
+
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": prefix}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        response = s3_client.list_objects_v2(**kwargs)
+        objects.extend(response.get("Contents", []))
+
+        if not response.get("IsTruncated"):
+            break
+
+        continuation_token = response.get("NextContinuationToken")
+        if not continuation_token:
+            break
+
+    return objects
+
+
 @sensor(
     name="wrm_stations_raw_data_sensor",
     job=wrm_stations_processing_job,
@@ -44,19 +76,16 @@ def wrm_stations_raw_data_sensor(context: SensorEvaluationContext):
             except ValueError:
                 context.log.warning(f"Invalid cursor format: {cursor}")
 
-        # List all raw data files
+        # List all raw data files across every S3 page
         raw_s3_prefix = f"{WRM_STATIONS_S3_PREFIX}raw/"
 
-        response = s3_client.list_objects_v2(
-            Bucket=BUCKET_NAME,
-            Prefix=raw_s3_prefix
-        )
+        all_objects = _list_all_objects_v2(s3_client, BUCKET_NAME, raw_s3_prefix)
 
-        if 'Contents' not in response or not response['Contents']:
+        if not all_objects:
             return SkipReason("No raw data files found")
 
         # Filter to only include .txt files and sort by LastModified
-        txt_files = [obj for obj in response['Contents'] if obj['Key'].endswith('.txt')]
+        txt_files = [obj for obj in all_objects if obj['Key'].endswith('.txt')]
 
         if not txt_files:
             return SkipReason("No .txt files found in raw data")

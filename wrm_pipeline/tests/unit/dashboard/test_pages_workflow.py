@@ -2,7 +2,8 @@
 
 Contract under test (``.github/workflows/pages.yml``):
 - ``on``: push(main) + workflow_dispatch + repository_dispatch
-  ``[wrm-parquet-updated]`` + schedule cron ``30 5 * * *``.
+  ``[wrm-parquet-updated]`` + schedule cron ``7,22,37,52 * * * *`` (seven
+  minutes after each Dagster 15-minute tick).
 - ``build`` job probes freshness into ``steps.freshness.outputs.stale`` and
   exposes it as the ``build.stale`` job output, plus the probe-computed
   ``steps.freshness.outputs.fingerprint`` as the ``build.fingerprint`` output.
@@ -224,10 +225,13 @@ class TestTriggers:
         dispatch = on["repository_dispatch"]
         assert dispatch["types"] == ["wrm-parquet-updated"]
 
-    def test_schedule_cron_30_5(self):
+    def test_schedule_cron_offset_15_minute_grid(self):
         on = _on(_load())
         crons = [entry["cron"] for entry in on["schedule"]]
-        assert crons == ["30 5 * * *"]
+        assert crons == ["7,22,37,52 * * * *"]
+        # Stay seven minutes past every 15-minute tick, not just at one offset.
+        minutes = [int(m) for m in crons[0].split()[0].split(",")]
+        assert all(minute % 15 == 7 for minute in minutes), minutes
 
     def test_push_main_and_workflow_dispatch_present(self):
         on = _on(_load())

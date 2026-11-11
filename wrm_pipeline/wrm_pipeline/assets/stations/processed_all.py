@@ -2,7 +2,7 @@ from dagster import asset, AssetExecutionContext, MaterializeResult, MetadataVal
 import requests
 import pandas as pd
 import ftfy
-from io import StringIO, BytesIO
+from io import BytesIO
 from datetime import datetime
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing import List
@@ -13,6 +13,7 @@ import hashlib
 from ...config import BUCKET_NAME, WRM_STATIONS_S3_PREFIX
 from ...models.stations import enhanced_daily_schema, processed_data_schema
 from .commons import daily_partitions
+from .transforms import parse_raw_stations_csv
 
 # S3 key patterns
 WRM_STATIONS_RAW_S3_KEY_PATTERN = f"{WRM_STATIONS_S3_PREFIX}raw/dt={{partition_date}}/wrm_stations_{{timestamp}}.txt"
@@ -95,7 +96,6 @@ def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.
             try:
                 # Extract timestamp from raw file name
                 import re
-                import csv
                 timestamp_match = re.search(r'wrm_stations_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.txt$', raw_data_key)
                 if timestamp_match:
                     timestamp_str = timestamp_match.group(1)
@@ -109,95 +109,16 @@ def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.
                 response = s3_client.get_object(Bucket=BUCKET_NAME, Key=raw_data_key)
                 data_text = response['Body'].read().decode('utf-8')
                 
-                # Parse and transform the data using CSV reader
-                f = StringIO(data_text)
-                reader = csv.reader(f)
-                rows = list(reader)
-                
-                if not rows:
-                    context.log.warning(f"Empty data from {raw_data_key}")
-                    continue
-                
-                context.log.info(f"Rows in {raw_data_key}: {len(rows)}")
-                
-                # Extract header and adjust for split fields
-                header = rows[0]
-                context.log.info(f"Original header: {header}")
-                
-                # Replace the second header field with three new headers
-                new_header = (
-                    [header[0], "timestamp", "gmt_local_diff_sec", "gmt_servertime_diff_sec"]
-                    + header[2:]
+                # Parse and transform the data using the shared helper
+                df = parse_raw_stations_csv(
+                    data_text,
+                    log=context.log,
+                    source_label=raw_data_key,
                 )
-                
-                data_rows = []
-                for row in rows[1:]:
-                    try:
-                        # Split the second field by '|'
-                        timestamp, gmt_local_diff_sec, gmt_servertime_diff_sec = row[1].split('|')
-                        # Construct the new row
-                        new_row = (
-                            [row[0], timestamp, gmt_local_diff_sec, gmt_servertime_diff_sec]
-                            + row[2:]
-                        )
-                        data_rows.append(new_row)
-                    except ValueError as e:
-                        context.log.warning(f"Could not split row {row}: {e}")
-                        continue
-                
-                if not data_rows:
-                    context.log.warning(f"No valid data rows from {raw_data_key}")
+
+                if df is None:
                     continue
-                
-                # Create DataFrame
-                df = pd.DataFrame(data_rows, columns=new_header)
-                
-                # Rename #id to station_id
-                df.rename(columns={'#id': 'station_id'}, inplace=True)
-                
-                # Convert data types
-                try:
-                    df['timestamp'] = df['timestamp'].astype(float)
-                    df['gmt_local_diff_sec'] = df['gmt_local_diff_sec'].astype(int)
-                    df['gmt_servertime_diff_sec'] = df['gmt_servertime_diff_sec'].astype(int)
-                    df['lat'] = df['lat'].astype(float)
-                    df['lon'] = df['lon'].astype(float)
-                    df['bikes'] = df['bikes'].astype(int)
-                    df['spaces'] = df['spaces'].astype(int)
-                    df['installed'] = df['installed'].map({'true': True, 'false': False})
-                    df['locked'] = df['locked'].map({'true': True, 'false': False})
-                    df['temporary'] = df['temporary'].map({'true': True, 'false': False})
-                    df['total_docks'] = df['total_docks'].astype(int)
-                    
-                    # Fix the boolean conversion for givesbonus_acceptspedelecs_fbbattlevel
-                    # Handle NaN/null values and map string values to boolean
-                    df['givesbonus_acceptspedelecs_fbbattlevel'] = df['givesbonus_acceptspedelecs_fbbattlevel'].fillna('false')
-                    df['givesbonus_acceptspedelecs_fbbattlevel'] = df['givesbonus_acceptspedelecs_fbbattlevel'].map({
-                        'true': True, 
-                        'false': False,
-                        '': False,  # Handle empty strings
-                        'True': True,
-                        'False': False
-                    })
-                    # Fill any remaining unmapped values with False
-                    df['givesbonus_acceptspedelecs_fbbattlevel'] = df['givesbonus_acceptspedelecs_fbbattlevel'].fillna(False)
-                    
-                    df['pedelecs'] = df['pedelecs'].astype(int)
-                    
-                    # Move name as 2nd column
-                    df = df[['station_id', 'name'] + [col for col in df.columns if col not in ['station_id', 'name']]]
-                    
-                    context.log.info(f"Successfully processed {len(df)} records from {raw_data_key}")
-                    context.log.info(f"Final columns: {list(df.columns)}")
-                    
-                    # Log the data types to debug
-                    context.log.info(f"givesbonus_acceptspedelecs_fbbattlevel dtype: {df['givesbonus_acceptspedelecs_fbbattlevel'].dtype}")
-                    context.log.info(f"givesbonus_acceptspedelecs_fbbattlevel unique values: {df['givesbonus_acceptspedelecs_fbbattlevel'].unique()}")
-                    
-                except Exception as e:
-                    context.log.error(f"Failed to convert data types for {raw_data_key}: {e}")
-                    continue
-                
+
                 # Add file source information before appending
                 df['s3_source_key'] = raw_data_key
                 df['file_timestamp'] = file_timestamp
@@ -208,8 +129,6 @@ def wrm_stations_processed_data_all_asset(context: AssetExecutionContext) -> pd.
                     "file_timestamp": file_timestamp,
                     "records_count": len(df)
                 })
-                
-                context.log.info(f"Successfully processed {len(df)} records from {raw_data_key}")
                     
             except Exception as e:
                 context.log.error(f"Failed to process file {raw_data_key}: {e}")

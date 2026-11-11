@@ -19,6 +19,13 @@ sibling ``*.tmp``, then an atomic ``os.replace``) AND the two S3 parquet
 objects. ``SNAPSHOT_PATH`` is redirected to ``tmp_path``, where the local
 file must exist with both tables, and no leftover ``*.tmp`` may remain.
 
+After both parquet COPYs the asset PUTs a deterministic content-fingerprint
+manifest (``wrm/dataset_manifest.json``) through the ``s3_resource``
+``get_client().put_object`` seam: SHA256 over the exported chart values plus
+per-table hashes/row counts. The resource is faked in-process
+(``_FakeS3Resource``) so the suite is hermetic and the PUT ordering/failure
+semantics are assertable without a bucket.
+
 Test strategy
 -------------
 Execution tests run the REAL asset function against a REAL source DuckDB file
@@ -36,14 +43,20 @@ snapshot → counts → COPY orchestration order and the fail-before-COPY
 guarantee (a broken upstream raises before any object reaches S3).
 
 ``BUCKET_NAME`` is patched to a deterministic ``test-bucket`` so the expected
-keys are stable and no real bucket is ever contacted.
+keys are stable and no real bucket is ever contacted. ``s3_resource`` (required
+by the asset) is supplied as a small fake exposing only
+``get_client().put_object`` — the single S3 SDK seam the asset uses for the
+manifest — which records each PUT (key, body, and how many ``COPY`` statements
+had already run) and can be armed to raise, so upload failures are proven to
+propagate.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -53,7 +66,10 @@ from dagster import AssetKey, MaterializeResult, build_asset_context
 
 import wrm_pipeline.assets.dashboard as dashboard_module
 from wrm_pipeline.assets.dashboard import (
+    DATA_FINGERPRINT_VERSION,
     DENSITY_EXPORT_KEY,
+    MANIFEST_EXPORT_KEY,
+    MANIFEST_SCHEMA_VERSION,
     SNAPSHOT_PATH as DEFAULT_SNAPSHOT_PATH,
     STATIONS_EXPORT_KEY,
 )
@@ -70,6 +86,7 @@ SNAPSHOT_TS = datetime(2026, 9, 21, 12, 0, 0)
 TEST_BUCKET = "test-bucket"
 EXPECTED_STATIONS_KEY = f"s3://{TEST_BUCKET}/{STATIONS_EXPORT_KEY}"
 EXPECTED_DENSITY_KEY = f"s3://{TEST_BUCKET}/{DENSITY_EXPORT_KEY}"
+EXPECTED_MANIFEST_KEY = f"s3://{TEST_BUCKET}/{MANIFEST_EXPORT_KEY}"
 
 STATIONS_SNAPSHOT_COLUMNS = [
     ("station_id", "VARCHAR"),
@@ -113,6 +130,72 @@ def _parse_copy_target(normalized_sql: str) -> tuple[str, str]:
     end = normalized_sql.find("'", start + 1)
     url = normalized_sql[start + 1 : end]
     return table, url
+
+
+# Fingerprinted columns mirror the exported projections (charts): every column
+# of each snapshot table participates in the manifest hash.
+STATIONS_FINGERPRINT_COLUMNS = [name for name, _type in STATIONS_SNAPSHOT_COLUMNS]
+DENSITY_FINGERPRINT_COLUMNS = [name for name, _type in DENSITY_SNAPSHOT_COLUMNS]
+
+
+class _FakeS3Client:
+    """Records ``put_object`` calls; optionally raises to simulate an outage.
+
+    The asset's only S3 SDK call is the manifest PUT
+    (``get_client().put_object``); the parquet uploads go through DuckDB's
+    httpfs ``COPY``, intercepted by ``_RecordingConnection``. Each recorded
+    call captures ``copies_before_put`` — how many ``COPY`` statements were
+    already logged when the PUT was attempted — which is how the
+    ``COPY`` → ``PUT`` ordering guarantee (manifest strictly after both
+    parquet exports) is asserted without relying on wall-clock timing.
+    """
+
+    def __init__(self, executed: list[str]) -> None:
+        self._executed = executed
+        # Set to an exception instance to arm the failure path.
+        self.error: Exception | None = None
+        self.put_calls: list[dict] = []
+
+    def put_object(self, **kwargs):
+        self.put_calls.append(
+            {
+                "kwargs": kwargs,
+                "copies_before_put": sum(
+                    1 for stmt in self._executed if stmt.startswith("COPY ")
+                ),
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+
+class _FakeS3Resource:
+    """Minimal stand-in for ``S3Resource``: just ``get_client()``."""
+
+    def __init__(self, client: _FakeS3Client) -> None:
+        self._client = client
+
+    def get_client(self) -> _FakeS3Client:
+        return self._client
+
+
+def _scripted_datetime(monkeypatch, *instants: datetime) -> None:
+    """Freeze the dashboard module's ``datetime.now()`` to scripted instants.
+
+    ``_canonical_value`` does ``isinstance(value, (datetime, date))``, so the
+    replacement must stay a real ``datetime`` subclass; only ``now`` is
+    overridden. This makes ``generated_at`` controllable across runs while
+    proving it never feeds ``data_hash``.
+    """
+    remaining = list(instants)
+
+    class _ScriptedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: N805 - stdlib signature
+            return remaining.pop(0)
+
+    monkeypatch.setattr(dashboard_module, "datetime", _ScriptedDatetime)
 
 
 class _RecordingConnection:
@@ -216,6 +299,9 @@ class SnapshotEnv:
         self.bucket = TEST_BUCKET
         self.stations_key = EXPECTED_STATIONS_KEY
         self.density_key = EXPECTED_DENSITY_KEY
+        # Fake S3 SDK seam: only the manifest PUT goes through it.
+        self.s3_client = _FakeS3Client(self.executed)
+        self.s3_resource = _FakeS3Resource(self.s3_client)
 
         monkeypatch.setattr(dashboard_module, "db_path", self.source)
         monkeypatch.setattr(dashboard_module, "SNAPSHOT_PATH", self.snapshot)
@@ -234,10 +320,16 @@ class SnapshotEnv:
 
     # -- source database helpers -------------------------------------------
     def seed(self, rows: list[tuple]) -> None:
-        """Create the wrm_stations_latest table with the given rows."""
+        """(Re)create wrm_stations_latest with the given rows.
+
+        ``CREATE OR REPLACE`` keeps the same ``SnapshotEnv`` reusable across
+        runs (manifest determinism tests seed twice in one test).
+        """
         conn = duckdb.connect(self.source)
         try:
-            conn.execute(f"CREATE TABLE wrm_stations_latest ({_STATION_DDL});")
+            conn.execute(
+                f"CREATE OR REPLACE TABLE wrm_stations_latest ({_STATION_DDL});"
+            )
             if rows:
                 placeholders = ", ".join(["?"] * _STATION_COLUMN_COUNT)
                 conn.executemany(
@@ -251,11 +343,34 @@ class SnapshotEnv:
         self.seed([])
 
     # -- asset invocation ----------------------------------------------------
+    def context(self):
+        """Fresh asset context bound to the fake ``s3_resource``."""
+        return build_asset_context(resources={"s3_resource": self.s3_resource})
+
     def run(self):
         """Execute the real asset function; return its MaterializeResult."""
-        result = evidence_data_snapshot(build_asset_context())
+        result = evidence_data_snapshot(self.context())
         assert isinstance(result, MaterializeResult)
         return result
+
+    # -- manifest inspection (S3 SDK seam, no real upload) ------------------
+    def manifest_puts(self) -> list[dict]:
+        """Recorded ``put_object`` calls targeting the manifest key."""
+        return [
+            call
+            for call in self.s3_client.put_calls
+            if call["kwargs"].get("Key") == MANIFEST_EXPORT_KEY
+        ]
+
+    def manifest_bodies(self) -> list[dict]:
+        """Parsed JSON bodies of the recorded manifest PUTs, in call order."""
+        return [json.loads(call["kwargs"]["Body"]) for call in self.manifest_puts()]
+
+    def manifest(self, index: int = -1) -> dict:
+        """Parsed body of the ``index``-th manifest PUT (default: last)."""
+        bodies = self.manifest_bodies()
+        assert bodies, "asset never uploaded a dataset manifest"
+        return bodies[index]
 
     # -- COPY-time export inspection (TEMP contents captured, no S3 read) ---
     def exported_columns(self, table: str) -> list[tuple]:
@@ -576,6 +691,8 @@ class TestExportFailurePaths:
         # Fail-before-write: no ATTACH ever runs, so nothing reaches disk.
         assert not any(s.startswith("ATTACH") for s in env.executed)
         assert not os.path.exists(env.snapshot)
+        # ...and no manifest is PUT for data the bucket never received.
+        assert env.s3_client.put_calls == []
 
     def test_corrupt_snapshot_sql_raises_and_copies_nothing(
         self, env: SnapshotEnv, monkeypatch
@@ -593,25 +710,28 @@ class TestExportFailurePaths:
         # The failure happened during materialization: no S3 object written.
         assert env.copy_keys == []
         assert not any(s.startswith("COPY ") for s in env.executed)
+        assert env.s3_client.put_calls == []
 
     def test_missing_bucket_raises_before_connect(self, env, monkeypatch):
         """BUCKET_NAME unset → ValueError before any DuckDB statement runs."""
         monkeypatch.setattr(dashboard_module, "BUCKET_NAME", "")
 
         with pytest.raises(ValueError, match="BUCKET_NAME"):
-            evidence_data_snapshot(build_asset_context())
+            evidence_data_snapshot(env.context())
 
         assert env.executed == []
         assert env.copy_keys == []
+        assert env.s3_client.put_calls == []
 
     def test_missing_bucket_none_raises_before_connect(self, env, monkeypatch):
         monkeypatch.setattr(dashboard_module, "BUCKET_NAME", None)
 
         with pytest.raises(ValueError, match="BUCKET_NAME"):
-            evidence_data_snapshot(build_asset_context())
+            evidence_data_snapshot(env.context())
 
         assert env.executed == []
         assert env.copy_keys == []
+        assert env.s3_client.put_calls == []
 
 
 class TestExecutionOrder:
@@ -758,3 +878,240 @@ class TestEndpointHandling:
         assert self._endpoint_set(env) == "SET s3_endpoint='';"
         assert result.metadata["stations_latest_rows"] == 4
         assert env.copy_keys == [EXPECTED_STATIONS_KEY, EXPECTED_DENSITY_KEY]
+
+
+# Scripted wall-clock instants for manifest determinism tests: same data must
+# hash identically even though ``generated_at`` differs between runs.
+MANIFEST_TS_ONE = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
+MANIFEST_TS_TWO = datetime(2026, 9, 21, 12, 15, 0, tzinfo=timezone.utc)
+
+
+class TestDatasetManifest:
+    """Content-fingerprint manifest: PUT target, order, fields, key set."""
+
+    def test_manifest_put_targets_expected_key_after_both_parquet_exports(
+        self, env: SnapshotEnv
+    ):
+        env.seed(GRID_ROWS)
+        env.run()
+
+        puts = env.manifest_puts()
+        assert len(puts) == 1
+        call = puts[0]
+        assert call["kwargs"]["Bucket"] == TEST_BUCKET
+        assert call["kwargs"]["Key"] == MANIFEST_EXPORT_KEY
+        assert call["kwargs"]["ContentType"] == "application/json"
+        assert EXPECTED_MANIFEST_KEY == f"s3://{TEST_BUCKET}/{MANIFEST_EXPORT_KEY}"
+
+        # Both parquet COPYs had already been executed when the PUT ran...
+        assert call["copies_before_put"] == 2
+        assert env.copy_keys == [EXPECTED_STATIONS_KEY, EXPECTED_DENSITY_KEY]
+        # ...and the manifest is an SDK PUT, never a third DuckDB COPY.
+        assert sum(1 for s in env.executed if s.startswith("COPY ")) == 2
+
+    def test_manifest_body_has_required_fields_and_row_counts(
+        self, env: SnapshotEnv
+    ):
+        env.seed(GRID_ROWS)
+        result = env.run()
+
+        manifest = env.manifest()
+        assert set(manifest) == {
+            "schema_version",
+            "fingerprint_version",
+            "data_hash",
+            "generated_at",
+            "export_keys",
+            "tables",
+        }
+        assert manifest["schema_version"] == MANIFEST_SCHEMA_VERSION
+        assert manifest["fingerprint_version"] == DATA_FINGERPRINT_VERSION
+        assert manifest["export_keys"] == [STATIONS_EXPORT_KEY, DENSITY_EXPORT_KEY]
+
+        # Hashes are lowercase 64-char SHA256 digests.
+        assert len(manifest["data_hash"]) == 64
+        int(manifest["data_hash"], 16)
+        # generated_at is an ISO-8601, timezone-aware timestamp.
+        assert datetime.fromisoformat(manifest["generated_at"]).tzinfo is not None
+
+        # The materialization metadata mirrors the manifest.
+        assert result.metadata["data_hash"] == manifest["data_hash"]
+        assert result.metadata["dataset_manifest_key"] == EXPECTED_MANIFEST_KEY
+        assert (
+            result.metadata["dataset_manifest_schema_version"]
+            == MANIFEST_SCHEMA_VERSION
+        )
+
+        tables = manifest["tables"]
+        assert set(tables) == {"stations_latest", "density_grid"}
+        expected = {
+            "stations_latest": (
+                STATIONS_EXPORT_KEY,
+                STATIONS_FINGERPRINT_COLUMNS,
+                4,
+            ),
+            "density_grid": (DENSITY_EXPORT_KEY, DENSITY_FINGERPRINT_COLUMNS, 3),
+        }
+        for table, (export_key, columns, row_count) in expected.items():
+            entry = tables[table]
+            assert entry["export_key"] == export_key
+            assert entry["columns"] == columns
+            assert entry["row_count"] == row_count
+            assert entry["row_count"] == result.metadata[f"{table}_rows"]
+            assert len(entry["table_hash"]) == 64
+            int(entry["table_hash"], 16)
+
+    def test_manifest_body_is_canonical_json_with_trailing_newline(
+        self, env: SnapshotEnv
+    ):
+        env.seed(GRID_ROWS)
+        env.run()
+
+        raw = env.manifest_puts()[0]["kwargs"]["Body"]
+        assert isinstance(raw, bytes)
+        assert raw.endswith(b"\n")
+        text = raw.decode("utf-8")
+        assert text == json.dumps(
+            json.loads(text), sort_keys=True, separators=(",", ":")
+        ) + "\n"
+
+    def test_empty_datasets_still_produce_manifest_hashes(self, env: SnapshotEnv):
+        env.seed_table_only()
+        result = env.run()
+
+        manifest = env.manifest()
+        assert manifest["tables"]["stations_latest"]["row_count"] == 0
+        assert manifest["tables"]["density_grid"]["row_count"] == 0
+        assert len(manifest["data_hash"]) == 64
+        assert result.metadata["data_hash"] == manifest["data_hash"]
+
+
+class TestManifestDeterminism:
+    """Identical chart values hash identically; changes move the digest."""
+
+    def test_identical_data_produces_identical_hashes(
+        self, env: SnapshotEnv, monkeypatch
+    ):
+        _scripted_datetime(monkeypatch, MANIFEST_TS_ONE, MANIFEST_TS_TWO)
+        env.seed(GRID_ROWS)
+
+        first = env.run()
+        second = env.run()
+
+        first_manifest = env.manifest(0)
+        second_manifest = env.manifest(1)
+        assert first_manifest["generated_at"] == MANIFEST_TS_ONE.isoformat()
+        assert second_manifest["generated_at"] == MANIFEST_TS_TWO.isoformat()
+
+        # generated_at is metadata only and never feeds the fingerprint.
+        assert second_manifest["data_hash"] == first_manifest["data_hash"]
+        assert second.metadata["data_hash"] == first.metadata["data_hash"]
+        for table in ("stations_latest", "density_grid"):
+            assert (
+                second_manifest["tables"][table]["table_hash"]
+                == first_manifest["tables"][table]["table_hash"]
+            )
+
+        # One manifest PUT per materialization.
+        assert len(env.manifest_puts()) == 2
+
+    def test_row_insertion_order_does_not_change_hash(self, env: SnapshotEnv):
+        env.seed(GRID_ROWS)
+        baseline = env.run().metadata["data_hash"]
+        baseline_manifest = env.manifest(0)
+
+        env.seed(list(reversed(GRID_ROWS)))
+        reordered = env.run()
+        reordered_manifest = env.manifest(1)
+
+        assert reordered.metadata["data_hash"] == baseline
+        for table in ("stations_latest", "density_grid"):
+            assert (
+                reordered_manifest["tables"][table]["table_hash"]
+                == baseline_manifest["tables"][table]["table_hash"]
+            )
+
+    def test_chart_value_change_changes_data_hash(self, env: SnapshotEnv):
+        env.seed(GRID_ROWS)
+        baseline = env.run()
+        baseline_manifest = env.manifest(0)
+
+        changed_rows = list(GRID_ROWS)
+        changed_rows[0] = _row("001", "Alpha", 4, 51.0000, 17.0000)  # 5 -> 4 bikes
+        env.seed(changed_rows)
+        changed = env.run()
+        changed_manifest = env.manifest(1)
+
+        assert changed.metadata["data_hash"] != baseline.metadata["data_hash"]
+        assert changed_manifest["data_hash"] != baseline_manifest["data_hash"]
+        # The changed chart value moves BOTH datasets: the station row and the
+        # shared Alpha+Beta cell (8 -> 7 bikes).
+        for table in ("stations_latest", "density_grid"):
+            assert (
+                changed_manifest["tables"][table]["table_hash"]
+                != baseline_manifest["tables"][table]["table_hash"]
+            )
+        # Shape is unchanged: the digest moved because content moved.
+        assert changed_manifest["tables"]["stations_latest"]["row_count"] == 4
+        assert changed_manifest["tables"]["density_grid"]["row_count"] == 3
+
+    def test_non_grid_field_change_only_moves_stations_hash(
+        self, env: SnapshotEnv
+    ):
+        """Per-table hashes are independent: a rename never moves the grid."""
+        env.seed(GRID_ROWS)
+        env.run()
+        baseline = env.manifest(0)
+
+        renamed = list(GRID_ROWS)
+        renamed[0] = _row("001", "Alpha Renamed", 5, 51.0000, 17.0000)
+        env.seed(renamed)
+        env.run()
+        changed = env.manifest(1)
+
+        assert (
+            changed["tables"]["stations_latest"]["table_hash"]
+            != baseline["tables"]["stations_latest"]["table_hash"]
+        )
+        # density_grid aggregates coords/bikes only, so the rename is invisible.
+        assert (
+            changed["tables"]["density_grid"]["table_hash"]
+            == baseline["tables"]["density_grid"]["table_hash"]
+        )
+        # The combined digest still changes (stations contributed to it).
+        assert changed["data_hash"] != baseline["data_hash"]
+
+
+class TestManifestUploadFailure:
+    """A failed manifest PUT must fail the run, never be swallowed."""
+
+    def test_put_failure_propagates_after_both_parquet_exports(
+        self, env: SnapshotEnv
+    ):
+        env.seed(GRID_ROWS)
+        error = RuntimeError("manifest upload failed: bucket unavailable")
+        env.s3_client.error = error
+
+        with pytest.raises(RuntimeError) as excinfo:
+            env.run()
+
+        # The original error object propagates unwrapped.
+        assert excinfo.value is error
+        # Both parquet COPYs had already completed; the PUT was last.
+        assert env.copy_keys == [EXPECTED_STATIONS_KEY, EXPECTED_DENSITY_KEY]
+        puts = env.manifest_puts()
+        assert len(puts) == 1
+        assert puts[0]["copies_before_put"] == 2
+        # Local-first contract: the snapshot written before any upload remains.
+        assert os.path.isfile(env.snapshot)
+
+    def test_put_failure_is_attempted_once_and_not_swallowed(
+        self, env: SnapshotEnv
+    ):
+        env.seed(GRID_ROWS)
+        env.s3_client.error = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            env.run()
+
+        assert len(env.s3_client.put_calls) == 1

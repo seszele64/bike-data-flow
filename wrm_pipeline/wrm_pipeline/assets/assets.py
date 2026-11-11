@@ -10,6 +10,12 @@ from .stations import (
     wrm_stations_enhanced_data_all_asset,
 )
 
+# Unpartitioned latest-data assets (stable keys, no daily partitions)
+from .stations.latest_all import (
+    wrm_stations_processed_data_latest_asset,
+    wrm_stations_enhanced_data_latest_asset,
+)
+
 # DuckDB assets
 from .duckdb import (
     create_duckdb_enhanced_views,
@@ -27,6 +33,8 @@ __all__ = [
     "wrm_stations_raw_data_asset",
     "wrm_stations_processed_data_all_asset",
     "wrm_stations_enhanced_data_all_asset",
+    "wrm_stations_processed_data_latest_asset",
+    "wrm_stations_enhanced_data_latest_asset",
     # DuckDB assets
     "create_duckdb_enhanced_views",
     "query_station_summary",
