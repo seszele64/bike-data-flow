@@ -77,14 +77,19 @@ jobs:
           # Re-point the AWS CLI's variable names at the already-injected S3_*
           # values (the same getenv-style hand-off the Assemble step uses for
           # WRM_S3_ENDPOINT); nothing is printed.
-          export AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY_ID"
-          export AWS_SECRET_ACCESS_KEY="$S3_SECRET_ACCESS_KEY"
+          # `${VAR:-}` everywhere below: a missing secret makes GitHub set the
+          # variable to empty, but an unset variable under `set -u` would abort
+          # the step before `emit`, breaking the fail-open contract.
+          export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID:-}"
+          export AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-}"
           export AWS_DEFAULT_REGION="auto"
+          # Normalize a possibly-unset secret so `set -u` cannot abort the step.
+          BUCKET_NAME="${BUCKET_NAME:-}"
           # Path-style addressing, matching DuckDB's s3_url_style='path' in the
           # Assemble step (configure writes only ~/.aws/config, no secrets).
           aws configure set default.s3.addressing_style path >/dev/null 2>&1 || true
 
-          AWS_ARGS=(--endpoint-url "$S3_ENDPOINT_URL")
+          AWS_ARGS=(--endpoint-url "${S3_ENDPOINT_URL:-}")
           MARKER_KEY="wrm/.pages-freshness-fingerprint"
           PARQUET_KEYS=(wrm/stations_latest.parquet wrm/density_grid.parquet)
 

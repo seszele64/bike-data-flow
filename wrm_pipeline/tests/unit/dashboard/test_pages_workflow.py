@@ -17,6 +17,9 @@ Contract under test (``.github/workflows/pages.yml``):
   non-secret step env var (``BUILD_FP``), recomputes the S3 fingerprint and
   writes the marker only when the two still match; on mismatch it warns and
   skips the ``put-object`` so the next scheduled run re-publishes.
+- ``set -u`` safety: the probe normalizes each injected S3 secret with
+  ``${VAR:-}`` before its first use, so a genuinely unset variable cannot
+  abort the step ahead of ``emit`` and break the fail-open contract.
 
 Strategy: pure unit, offline, no network/secrets. Parses pages.yml as YAML and
 pins the exact gate strings. No credential values are read or written.
@@ -471,3 +474,68 @@ class TestSecretScope:
         # 4 names x 4 scopes (probe, assemble, fetch, record job).
         assert text.count("${{ secrets.") == 16
         assert set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text)) == set(SECRET_ENV)
+
+
+# --------------------------------------------------------------------------- #
+# `set -u` safety: probe secrets are normalized before their first use
+# --------------------------------------------------------------------------- #
+PROBE_NORMALIZED_VARS = (
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "BUCKET_NAME",
+    "S3_ENDPOINT_URL",
+)
+
+
+def _unsafe_expansion_offsets(run: str, var: str) -> list[int]:
+    """Offsets of ``$VAR`` and ``${VAR}`` uses lacking a ``:-`` default.
+
+    ``${VAR:-...}`` (and other braced forms that supply a fallback) are safe
+    under ``set -u`` and are deliberately not matched.
+    """
+    pattern = rf"\$(?:{re.escape(var)}\b|\{{{re.escape(var)}\}})"
+    return [m.start() for m in re.finditer(pattern, run)]
+
+
+class TestProbeSecretNormalization:
+    """Under ``set -u`` the fail-open probe must never touch an unset secret.
+
+    GitHub substitutes a missing secret with the empty string, but the value
+    can still be genuinely unset on some propagation paths. Every probe secret
+    is therefore normalized with ``${VAR:-}`` *before* its first use; either a
+    bare ``$VAR`` or a defaultless ``${VAR}`` ahead of that normalization
+    aborts the step under ``set -u`` before ``emit`` writes ``stale``, which
+    would break the fail-open gate. Bare uses after normalization (e.g.
+    ``--bucket "$BUCKET_NAME"``) stay valid because the assignment above has
+    already defined them.
+    """
+
+    @pytest.mark.parametrize("var", PROBE_NORMALIZED_VARS)
+    def test_probe_normalizes_secret_with_default(self, var):
+        run = _probe_step()["run"]
+        normalized = f"${{{var}:-}}"
+        assert normalized in run, (
+            f"{var} must be normalized as {normalized} under `set -u`"
+        )
+
+    @pytest.mark.parametrize("var", PROBE_NORMALIZED_VARS)
+    def test_probe_has_no_unsafe_expansion_before_normalization(self, var):
+        run = _probe_step()["run"]
+        normalized = f"${{{var}:-}}"
+        norm_at = run.find(normalized)
+        assert norm_at != -1, (
+            f"{var} must be normalized as {normalized} under `set -u`"
+        )
+        early = [at for at in _unsafe_expansion_offsets(run, var) if at < norm_at]
+        assert not early, (
+            f"unsafe ${var} expansion before {normalized} under `set -u` "
+            f"(offsets {early})"
+        )
+
+    @pytest.mark.parametrize("snippet", ["$VAR", "${VAR}"])
+    def test_unsafe_expansion_matcher_flags_missing_default(self, snippet):
+        assert _unsafe_expansion_offsets(f'use "{snippet}"', "VAR") == [5]
+
+    @pytest.mark.parametrize("snippet", ["${VAR:-}", "${VAR:-fallback}"])
+    def test_unsafe_expansion_matcher_ignores_defaulted_forms(self, snippet):
+        assert _unsafe_expansion_offsets(f'use "{snippet}"', "VAR") == []
