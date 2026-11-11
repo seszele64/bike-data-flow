@@ -206,6 +206,174 @@ The pipeline publishes an [Evidence](https://evidence.dev) static dashboard that
 - **Attribution (required by OSM's tile policy)**: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
 - **Deployed dashboard**: <https://seszele64.github.io/bike-data-flow/> (GitHub Pages, built with basePath `/bike-data-flow`).
 
+### Dashboard Publish Pipeline ([`pages.yml`](.github/workflows/pages.yml))
+
+The dashboard is rebuilt and redeployed by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml). A `build` job
+assembles the DuckDB snapshot from S3 Parquet, runs the Evidence static build
+(`@evidence-dev/evidence` 40.1.8), and uploads the
+`dashboard/build/bike-data-flow` artifact; a `deploy` job then publishes it to
+GitHub Pages, and a post-deploy `record-freshness` job writes the Parquet
+fingerprint that the next scheduled run compares against.
+
+#### Trigger matrix
+
+| Trigger | Event name | Publishes? | Notes |
+|---------|-----------|------------|-------|
+| Push to `main` | `push` | Always | Any merge to `main` redeploys. |
+| Manual run | `workflow_dispatch` | Always | Run from the Actions tab. |
+| Parquet refresh | `repository_dispatch` (`wrm-parquet-updated`) | Always | Event-driven rebuild (see contract below). |
+| Daily schedule | `schedule` (`30 5 * * *`) | Only when data changed | Skipped when the Parquet fingerprint matches the marker written by the last successful deploy. |
+
+The scheduled run fires at **05:30 UTC**, 30 minutes after the Dagster daily
+transform (`0 5 * * *`, [`definitions.py`](wrm_pipeline/wrm_pipeline/definitions.py))
+has written the day's Parquet, so the publish normally runs after the transform
+has finished. The 30-minute gap is not a guarantee: a transform that runs late
+can still overlap a scheduled publish.
+
+Because the marker is only written after a successful deploy, a scheduled run
+whose build or deploy failed (or was skipped) leaves the marker untouched and
+retries the publish on the next tick. Unchanged Parquet with a recorded marker
+skips the artifact-producing `Assemble` → `Fetch sources` → `Clean` → `Build` →
+`Upload` steps, the deploy **and** the marker write. A no-op day therefore does
+no build/upload or deploy work, but the checkout, Node.js setup, `npm ci` and
+freshness probe still run before the skip is decided.
+
+#### Freshness gate (skip when unchanged)
+
+Before any build work, the ungated `Check S3 parquet freshness` step probes the
+two published objects (`wrm/stations_latest.parquet`, `wrm/density_grid.parquet`)
+and computes a SHA-256 fingerprint of their `ETag` + `LastModified` metadata.
+It compares that fingerprint against the marker object
+`wrm/.pages-freshness-fingerprint`, which is written by the post-deploy
+`record-freshness` job after the last **successful** publish, and emits
+`stale=true|false` on `$GITHUB_OUTPUT`.
+
+- **Read-only probe**: the build step only `HEAD`s the two Parquet objects and
+  `GET`s the marker. It never writes the marker, so a probe can never mark data
+  fresh before it has actually been published.
+- **Fail-open**: any probe error (missing AWS CLI, failed `HEAD`, empty
+  metadata, missing marker) yields `stale=true` and the step still exits `0`,
+  so a broken check never blocks a publish.
+- **Publish gate**: the `Assemble` → `Fetch sources` → `Clean` → `Build` →
+  `Upload` steps run only when `github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'`.
+  Push, manual and dispatch runs therefore always publish; a **scheduled run
+  with unchanged Parquet produces no artifact and skips the build/upload and
+  deploy work**, though the job setup (checkout, Node.js, `npm ci`) and the
+  freshness probe still run.
+- **Deploy gate**: the `deploy` job requires `github.ref == 'refs/heads/main'`
+  and, on scheduled runs, `needs.build.outputs.stale == 'true'` — so the
+  unchanged-schedule skip is shared with `deploy` without re-probing S3.
+
+#### Post-deploy marker recording and retry
+
+The `record-freshness` job runs only after both `build` and `deploy` finish
+successfully:
+
+```yaml
+if: ${{ !cancelled() && needs.build.result == 'success' && needs.deploy.result == 'success' }}
+```
+
+- **Fresh recomputation**: rather than reusing the build-time `stale` value, the
+  job recomputes the same fingerprint (SHA-256 over both objects' `ETag` +
+  `LastModified`, in `stations_latest.parquet` → `density_grid.parquet` order).
+  Probe and recorder must stay byte-identical; the tests pin that contract.
+- **Post-deploy equality check**: the recomputed fingerprint is written to
+  `s3://$BUCKET_NAME/wrm/.pages-freshness-fingerprint` with `s3api put-object`
+  **only if it still equals** the fingerprint the build actually assembled from
+  (`needs.build.outputs.fingerprint`, passed into the step as `BUILD_FP`). A
+  missing value (the build probe failed open) and a changed value are warned
+  with distinct `::warning::` messages; both skip the write and exit `0`, so
+  the previous marker stays in place and the next scheduled run re-publishes.
+- **Residual timing caveat**: the equality check is a point-in-time comparison,
+  not proof that the deployed bytes are identical to what S3 holds now. If a
+  Parquet object moves from `A` to `B` and back to `A` between the build's
+  probe/assemble and the recorder's re-probe, both observations are `A`, so the
+  marker records `A` even though the deployed site may have assembled `B` (or a
+  mix of versions). The next scheduled run then treats `A` as already
+  published, leaving that copy stale until the Parquet changes again. The
+  window is normally one build-and-deploy cycle and is not detected, so the
+  gate is **at-least-once** rather than a byte-for-byte publication guarantee.
+  If data can flap across a deploy, trigger a `repository_dispatch` or re-run
+  after it settles.
+- **Best-effort**: the step deliberately omits `set -e`. A missing AWS CLI, an
+  unreachable bucket, a failed `HEAD`, a missing build fingerprint, changed
+  Parquet, or a rejected `PutObject` each emits a `::warning::` and exits `0`,
+  so marker bookkeeping can never fail the publish.
+- **Retry semantics**: the marker advances only when the whole
+  `build` → `deploy` → `record-freshness` chain succeeds **and** the post-deploy
+  re-probe still matches the build fingerprint. A failed, skipped or cancelled
+  deploy means the job never runs; a failed marker write leaves the previous
+  fingerprint in place. Either way the next scheduled run still sees changed
+  Parquet (`stale=true`) and publishes again. The gate is therefore
+  **at-least-once**: it may republish the same data, but it never records data
+  as fresh unless a deploy has succeeded and the fingerprint still matches at
+  record time.
+- **Permission caveat**: the credentials behind `S3_ACCESS_KEY_ID` need
+  `s3:PutObject` on the marker key, while the probe needs only
+  `s3:GetObject`/`HeadObject`. That write permission has **not** been verified
+  against the production credential. If it is denied, the deploy still
+  succeeds, the job warns, the marker never advances, and every scheduled run
+  republishes — the warning is the signal to grant `PutObject` on
+  `wrm/.pages-freshness-fingerprint`.
+
+#### O2 dispatch contract (`repository_dispatch`)
+
+When O2's Parquet publisher lands fresh `stations_latest` / `density_grid`
+Parquet in S3 it may rebuild the dashboard immediately instead of waiting for
+the 05:30 tick by sending a repository dispatch to this repository:
+
+```jsonc
+// POST /repos/seszele64/bike-data-flow/dispatches
+// Authorization: Bearer <sender PAT or GitHub App installation token>
+// Accept: application/vnd.github+json
+{
+  "event_type": "wrm-parquet-updated",
+  "client_payload": {}          // optional; unused by the workflow today
+}
+```
+
+- **`event_type`** must be exactly `wrm-parquet-updated` (the `repository_dispatch.types`
+  entry); other event types do not trigger a run.
+- **Authentication**: the sender uses **its own** PAT/App token. No token is
+  embedded in the workflow — `pages.yml` declares no dispatch credentials and
+  receives no secret from the caller.
+- **Effect**: a dispatch is treated like a push (publish always) and bypasses
+  the freshness comparison, so the build runs even if the fingerprint is
+  unchanged.
+
+#### Credential scoping
+
+S3 credentials (`S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+`BUCKET_NAME`) are injected **by name only** via `${{ secrets.* }}` — four
+names, in four scopes (16 secret references in the file):
+
+- three step-level `env` blocks in `build` for the steps that read the private
+  bucket: `Check S3 parquet freshness`, `Assemble wrm.duckdb from S3 parquet`,
+  and `Fetch sources`;
+- one job-level `env` block on `record-freshness`, inherited by its single
+  marker-writing step; that step declares only the non-secret `BUILD_FP`
+  (`${{ needs.build.outputs.fingerprint }}`) in a step-level `env` block, so it
+  still receives no credential of its own.
+
+No secret value — credential, endpoint, ETag, fingerprint or bucket name — is
+ever echoed to the logs. `npm run build`, the artifact upload and the whole
+`deploy` job stay secret-free, so the `github-pages` environment and the
+deploy action never receive bucket credentials; only the post-deploy job
+attempts a write, and only to the marker key.
+
+> **Verification**: the trigger matrix, gate strings, read-only probe,
+> post-deploy marker job, retry gate and credential scoping above are pinned by
+> [`test_pages_workflow.py`](wrm_pipeline/tests/unit/dashboard/test_pages_workflow.py)
+> and [`test_evidence_deploy.py`](wrm_pipeline/tests/unit/dashboard/test_evidence_deploy.py)
+> (offline unit tests, no network or secrets):
+>
+> ```bash
+> uv run pytest \
+>   wrm_pipeline/tests/unit/dashboard/test_pages_workflow.py \
+>   wrm_pipeline/tests/unit/dashboard/test_evidence_deploy.py
+> ```
+
 ## 📁 Project Structure
 
 ```
@@ -227,7 +395,7 @@ bike-data-flow/
 ├── .github/
 │   └── workflows/
 │       ├── gitleaks.yml                # Secret scanning
-│       └── pages.yml                   # Evidence build & GitHub Pages deploy
+│       └── pages.yml                   # Evidence build & Pages deploy (freshness-gated)
 ├── config/
 │   └── vault/                          # Vault server config, policies & audit devices
 ├── scripts/

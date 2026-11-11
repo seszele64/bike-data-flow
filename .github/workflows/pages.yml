@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Event-driven rebuild: O2's parquet publisher dispatches
+  # `wrm-parquet-updated` once fresh stations_latest/density_grid parquet
+  # lands in S3. No token is embedded here; the sender authenticates with its
+  # own PAT/App token when calling the repository_dispatch API.
+  repository_dispatch:
+    types: [wrm-parquet-updated]
+  schedule:
+    # 30 min after the Dagster daily transform (0 5 * * * UTC) so parquet is fresh.
+    - cron: "30 5 * * *"
 
 permissions:
   contents: read
@@ -17,6 +26,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      # Exposed so `deploy` can share the freshness gate without re-probing S3;
+      # step-level outputs are not visible across jobs.
+      stale: ${{ steps.freshness.outputs.stale }}
+      # Fingerprint of the parquet objects this build actually assembled from.
+      # `record-freshness` compares it with a fresh probe so a change that lands
+      # between build and recording is not marked as already published.
+      fingerprint: ${{ steps.freshness.outputs.fingerprint }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,7 +42,94 @@ jobs:
       - name: Install dependencies
         working-directory: dashboard
         run: npm ci
+      - name: Check S3 parquet freshness
+        id: freshness
+        env:
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+        run: |
+          # Freshness gate: HEAD the two published parquet objects and compare
+          # their ETag/Last-Modified fingerprint with the marker object left by
+          # the previous successful publish. Emits `stale` (true == data changed
+          # or unknown) plus the probe-computed `fingerprint` on $GITHUB_OUTPUT;
+          # outputs are container metadata and are never echoed to the log.
+          # Fails OPEN: any probe error yields stale=true, no fingerprint, and
+          # the step still exits 0, so a broken check never blocks a publish.
+          # This step is READ-ONLY: it never writes the marker, which is recorded
+          # by the post-deploy `record-freshness` job only after a successful
+          # publish, so a failed deploy cannot advance it. Secrets are passed by
+          # NAME only via the env block above and no value (credential, ETag or
+          # endpoint) is ever echoed.
+          set -uo pipefail
+
+          emit() {
+            printf 'stale=%s\n' "$1" >> "$GITHUB_OUTPUT"
+            # Only publish a fingerprint when the probe actually computed one;
+            # an empty value keeps the post-deploy comparison conservative.
+            if [ -n "${2:-}" ]; then
+              printf 'fingerprint=%s\n' "$2" >> "$GITHUB_OUTPUT"
+            fi
+            printf 'S3 parquet freshness gate: stale=%s\n' "$1"
+          }
+
+          # Re-point the AWS CLI's variable names at the already-injected S3_*
+          # values (the same getenv-style hand-off the Assemble step uses for
+          # WRM_S3_ENDPOINT); nothing is printed.
+          # `${VAR:-}` everywhere below: a missing secret makes GitHub set the
+          # variable to empty, but an unset variable under `set -u` would abort
+          # the step before `emit`, breaking the fail-open contract.
+          export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID:-}"
+          export AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-}"
+          export AWS_DEFAULT_REGION="auto"
+          # Normalize a possibly-unset secret so `set -u` cannot abort the step.
+          BUCKET_NAME="${BUCKET_NAME:-}"
+          # Path-style addressing, matching DuckDB's s3_url_style='path' in the
+          # Assemble step (configure writes only ~/.aws/config, no secrets).
+          aws configure set default.s3.addressing_style path >/dev/null 2>&1 || true
+
+          AWS_ARGS=(--endpoint-url "${S3_ENDPOINT_URL:-}")
+          MARKER_KEY="wrm/.pages-freshness-fingerprint"
+          PARQUET_KEYS=(wrm/stations_latest.parquet wrm/density_grid.parquet)
+
+          # Stable hash of both objects' ETag + Last-Modified. A failed HEAD or
+          # an empty value makes this return non-zero (caller fails open).
+          fingerprint() {
+            local key meta out=""
+            for key in "${PARQUET_KEYS[@]}"; do
+              meta="$(aws "${AWS_ARGS[@]}" s3api head-object \
+                --bucket "$BUCKET_NAME" --key "$key" \
+                --query '[ETag,LastModified]' --output text)" || return 1
+              [ -n "$meta" ] || return 1
+              out="${out}${key} ${meta}"$'\n'
+            done
+            printf '%s' "$out" | sha256sum | awk '{print $1}'
+          }
+
+          STALE="true"
+          NEW_FP=""
+          if command -v aws >/dev/null 2>&1 && NEW_FP="$(fingerprint)"; then
+            OLD_FP=""
+            if aws "${AWS_ARGS[@]}" s3api get-object \
+                 --bucket "$BUCKET_NAME" --key "$MARKER_KEY" \
+                 /tmp/.wrm-freshness-marker >/dev/null 2>&1; then
+              OLD_FP="$(tr -d '\r\n' </tmp/.wrm-freshness-marker 2>/dev/null || true)"
+            fi
+            if [ -n "$OLD_FP" ] && [ "$OLD_FP" = "$NEW_FP" ]; then
+              STALE="false"
+            fi
+            # No marker write here: the fingerprint is recorded only by the
+            # `record-freshness` job after a successful deploy.
+          fi
+
+          emit "$STALE" "$NEW_FP"
+          exit 0
+      # Publish gate: push/dispatch always publish (condition is true). A
+      # scheduled run with unchanged parquet (freshness stale=false) skips
+      # assemble -> fetch -> build -> upload, so no artifact is produced.
       - name: Assemble wrm.duckdb from S3 parquet
+        if: github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'
         working-directory: dashboard
         env:
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
@@ -86,6 +190,7 @@ jobs:
 
           mv -f "$TMP" "$SNAPSHOT"
       - name: Fetch sources
+        if: github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'
         working-directory: dashboard
         env:
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
@@ -94,18 +199,24 @@ jobs:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
         run: npm run sources
       - name: Clean previous build output
+        if: github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'
         working-directory: dashboard
         run: rm -rf build/bike-data-flow
       - name: Build Evidence site
+        if: github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'
         working-directory: dashboard
         run: npm run build
       - name: Upload Pages artifact
+        if: github.event_name != 'schedule' || steps.freshness.outputs.stale == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard/build/bike-data-flow
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    # Main-branch gate preserved from the pre-freshness workflow; additionally
+    # skip when a scheduled run found unchanged parquet, since build then
+    # produced no artifact.
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || needs.build.outputs.stale == 'true')
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -115,3 +226,100 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # Record the parquet freshness fingerprint only AFTER a successful publish.
+  # A separate job (not a step in `deploy`) keeps `deploy` secret-free. Gated on
+  # both `build` and `deploy` succeeding, so a skipped, failed or cancelled
+  # deploy never advances the marker and the next scheduled run retries.
+  #
+  # TOCTOU guard: parquet can change after `build` assembled its snapshot. This
+  # job re-probes the current S3 fingerprint and writes the marker only when it
+  # still equals the fingerprint the build used; on a missing or changed value
+  # it warns, skips the write and exits 0, so the next scheduled run re-publishes
+  # instead of unassembled data being wrongly treated as already published.
+  record-freshness:
+    needs: [build, deploy]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+    steps:
+      - name: Record parquet freshness fingerprint
+        env:
+          # Fingerprint the build actually assembled from. Passed through `env`
+          # (not interpolated into the script) and never printed.
+          BUILD_FP: ${{ needs.build.outputs.fingerprint }}
+        run: |
+          # Best-effort by design: no `set -e`, every failure is reported with a
+          # warning and still exits 0, so the workflow is never failed by the
+          # marker write. No value (fingerprint, ETag, endpoint or credential) is
+          # ever printed.
+          set -uo pipefail
+
+          if ! command -v aws >/dev/null 2>&1; then
+            echo "::warning::AWS CLI unavailable; parquet freshness marker not recorded."
+            exit 0
+          fi
+
+          # Re-point the AWS CLI's variable names at the already-injected S3_*
+          # values; nothing is printed. Path-style addressing matches the
+          # freshness probe and DuckDB's s3_url_style='path'.
+          export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID:-}"
+          export AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-}"
+          export AWS_DEFAULT_REGION="auto"
+          aws configure set default.s3.addressing_style path >/dev/null 2>&1 || true
+          # Normalize a possibly-unset secret so `set -u` cannot abort the step.
+          BUCKET_NAME="${BUCKET_NAME:-}"
+
+          AWS_ARGS=(--endpoint-url "${S3_ENDPOINT_URL:-}")
+          MARKER_KEY="wrm/.pages-freshness-fingerprint"
+          PARQUET_KEYS=(wrm/stations_latest.parquet wrm/density_grid.parquet)
+
+          # Must stay byte-identical to the `build` freshness probe: SHA256 over
+          # each parquet's ETag + Last-Modified, in PARQUET_KEYS order.
+          fingerprint() {
+            local key meta out=""
+            for key in "${PARQUET_KEYS[@]}"; do
+              meta="$(aws "${AWS_ARGS[@]}" s3api head-object \
+                --bucket "$BUCKET_NAME" --key "$key" \
+                --query '[ETag,LastModified]' --output text)" || return 1
+              [ -n "$meta" ] || return 1
+              out="${out}${key} ${meta}"$'\n'
+            done
+            printf '%s' "$out" | sha256sum | awk '{print $1}'
+          }
+
+          # Recompute AFTER the deploy so a marker write always refers to the
+          # objects currently in S3. It must equal the fingerprint the build
+          # actually assembled from, otherwise writing NEW_FP would suppress the
+          # rebuild the current data still needs. Two distinct causes are warned
+          # separately: an empty BUILD_FP (the build probe failed open, so there
+          # is no trustworthy value to compare against) and a changed value
+          # (Parquet changed after `build` assembled its snapshot). Either way,
+          # leave the old marker untouched and let the next run re-publish.
+          if ! NEW_FP="$(fingerprint)"; then
+            echo "::warning::Could not compute parquet freshness fingerprint; marker not updated."
+            exit 0
+          fi
+
+          if [ -z "${BUILD_FP:-}" ] || [ "$NEW_FP" != "$BUILD_FP" ]; then
+            if [ -z "${BUILD_FP:-}" ]; then
+              echo "::warning::Build fingerprint unavailable; freshness marker not updated. The next scheduled run will re-publish."
+            else
+              echo "::warning::Parquet changed between build and freshness recording; marker not updated. The next scheduled run will re-publish."
+            fi
+            exit 0
+          fi
+
+          printf '%s' "$NEW_FP" >/tmp/.wrm-freshness-marker.new
+          if aws "${AWS_ARGS[@]}" s3api put-object \
+               --bucket "$BUCKET_NAME" --key "$MARKER_KEY" \
+               --body /tmp/.wrm-freshness-marker.new >/dev/null 2>&1; then
+            echo "Parquet freshness fingerprint recorded after successful deploy."
+          else
+            echo "::warning::Failed to record parquet freshness marker; the next scheduled run will re-publish."
+          fi
+          exit 0

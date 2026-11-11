@@ -9,10 +9,11 @@ Contract under test (wrm_pipeline/wrm_pipeline/assets/dashboard.py:197-247):
   (the GitHub Pages workflow owns publish); the deploy context reuses the
   ``_build_env`` secret-free contract so a future uploader cannot receive
   HETZNER_*/S3_* credentials.
-- ``.github/workflows/pages.yml`` (48 lines, B5.5): build job
+- ``.github/workflows/pages.yml`` (B5.5): build job
   (checkout/setup-node/npm ci/sources/build/upload-pages-artifact) +
-  deploy job (deploy-pages), permissions contents:read/pages:write/
-  id-token:write, concurrency group pages.
+  deploy job (deploy-pages) + post-deploy ``record-freshness`` job (marker
+  write, gated on both jobs succeeding), permissions contents:read/
+  pages:write/id-token:write, concurrency group pages.
 - ``.gitignore`` (B5.2): ``dashboard/build`` ignored so the static export
   never enters version control.
 
@@ -395,10 +396,38 @@ class TestPagesWorkflow:
         conc = _load_workflow()["concurrency"]
         assert conc == {"group": "pages", "cancel-in-progress": False}
 
-    def test_jobs_are_build_then_deploy(self):
+    def test_jobs_are_build_then_deploy_then_record_freshness(self):
         jobs = _load_workflow()["jobs"]
-        assert set(jobs) == {"build", "deploy"}
+        assert set(jobs) == {"build", "deploy", "record-freshness"}
         assert jobs["deploy"]["needs"] == "build"
+
+    def test_record_freshness_needs_build_and_deploy(self):
+        """Marker write depends on a published artifact *and* a live deploy."""
+        record = _load_workflow()["jobs"]["record-freshness"]
+        assert record["needs"] == ["build", "deploy"]
+
+    def test_record_freshness_gated_on_both_successes(self):
+        """A skipped/failed/cancelled deploy must never advance the marker."""
+        gate = _load_workflow()["jobs"]["record-freshness"]["if"]
+        assert "!cancelled()" in gate
+        assert "needs.build.result == 'success'" in gate
+        assert "needs.deploy.result == 'success'" in gate
+        # Both success checks must be ANDed; an OR would let a skipped deploy
+        # still record freshness.
+        assert "||" not in gate
+        assert "&&" in gate
+
+    def test_freshness_probe_is_read_only(self):
+        """Only the post-deploy job writes the marker; the build probe never does."""
+        build_steps = _load_workflow()["jobs"]["build"]["steps"]
+        probe = next(
+            s for s in build_steps if s.get("name") == "Check S3 parquet freshness"
+        )
+        assert "put-object" not in probe["run"]
+        # It still reads the previous marker to decide whether data changed.
+        assert "get-object" in probe["run"]
+        record = _load_workflow()["jobs"]["record-freshness"]["steps"][0]
+        assert "put-object" in record["run"]
 
     def test_build_runs_on_ubuntu(self):
         assert _load_workflow()["jobs"]["build"]["runs-on"] == "ubuntu-latest"
@@ -443,13 +472,15 @@ class TestPagesWorkflow:
         """Global hygiene + S3 secrets scoped to the S3-consuming steps.
 
         ``pages.yml`` injects ``S3_*``/``BUCKET_NAME`` via
-        ``${{ secrets.* }}`` references into the two steps that read the
-        private bucket: ``Assemble wrm.duckdb from S3 parquet`` and
-        ``Fetch sources`` (``npm run sources``) -- Evidence pulls both the
-        assembled ``wrm.duckdb`` snapshot and its sources from S3. Every
-        other step -- ``npm run build``, upload-artifact, and the whole
-        ``deploy`` job -- must stay secret-free, and no literal secret
-        values may appear anywhere (references only).
+        ``${{ secrets.* }}`` references into the three steps that read the
+        private bucket: ``Check S3 parquet freshness``, ``Assemble wrm.duckdb
+        from S3 parquet`` and ``Fetch sources`` (``npm run sources``) -- Evidence
+        pulls both the assembled ``wrm.duckdb`` snapshot and its sources from S3.
+        Every other step -- ``npm run build``, upload-artifact, and the whole
+        ``deploy`` job -- must stay secret-free. The post-deploy
+        ``record-freshness`` job is the only other secret consumer: exactly the
+        same four names at job level, and no literal secret values may appear
+        anywhere (references only).
         """
         with open(WORKFLOW_PATH, encoding="utf-8") as fh:
             text = fh.read()
@@ -486,15 +517,21 @@ class TestPagesWorkflow:
             for s in steps
             if s.get("name") == "Assemble wrm.duckdb from S3 parquet"
         )
+        freshness = next(
+            s
+            for s in steps
+            if s.get("name") == "Check S3 parquet freshness"
+        )
         allowed_env = {
             "S3_ENDPOINT_URL",
             "S3_ACCESS_KEY_ID",
             "S3_SECRET_ACCESS_KEY",
             "BUCKET_NAME",
         }
-        # Both S3-consuming steps must expose exactly the allow-listed
-        # names, each bound to a `secrets.*` reference (never a literal).
-        for s3_step in (assemble, fetch):
+        # All S3-consuming steps (Assemble, Fetch sources, freshness gate) must
+        # expose exactly the allow-listed names, each bound to a `secrets.*`
+        # reference (never a literal).
+        for s3_step in (assemble, fetch, freshness):
             env = s3_step.get("env", {})
             assert set(env) == allowed_env
             for value in env.values():
@@ -504,13 +541,27 @@ class TestPagesWorkflow:
         # Build output path: Build site / upload-artifact steps carry no env
         # secrets and no secrets references at all.
         for step in steps:
-            if step is fetch or step is assemble:
+            if step is fetch or step is assemble or step is freshness:
                 continue
             step_env = step.get("env", {})
             for key in step_env:
                 assert "secret" not in key.lower()
                 assert not key.startswith("S3_")
             assert "secrets." not in yaml.safe_dump(step)
+        # The post-deploy marker job is the only other job allowed to see S3
+        # credentials: job-level env, exactly the four allow-listed names, each
+        # bound to a `secrets.*` reference (never a literal), and step-level
+        # env stays empty so the values are not re-exported piecemeal.
+        record = data["jobs"]["record-freshness"]
+        record_env = record.get("env", {})
+        assert set(record_env) == allowed_env
+        for value in record_env.values():
+            assert re.fullmatch(
+                r"\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}", str(value)
+            ), f"record-freshness env must be a secrets reference, got {value!r}"
+        for step in record["steps"]:
+            assert "secrets." not in yaml.safe_dump(step)
+        # Publishing must never receive credentials: `deploy` stays secret-free.
         deploy = data["jobs"]["deploy"]
         assert "secrets." not in yaml.safe_dump(deploy)
 
